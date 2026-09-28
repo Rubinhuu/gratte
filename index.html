@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#0f3d2e">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   :root{
     --bg:#0b2a20; --card:#123a2c; --card2:#184a38; --line:#23594455;
@@ -71,6 +71,7 @@
 <!-- Page 1 : Ajouter -->
 <div class="page on" id="p-add">
   <h1>🎟️ <span>Grattage</span></h1>
+  <button class="btn" id="installBtn" style="display:none;margin:0 0 12px" onclick="installApp()">📲 Installer l'app</button>
 
   <div class="card net">
     <div class="lbl">Bilan total</div>
@@ -479,6 +480,26 @@ let savedCode = null;
 try { savedCode = localStorage.getItem(CODE_KEY); } catch (e) {}
 if (savedCode) start(savedCode);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+
+// Bouton "Installer l'app" (Chrome Android)
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  installPrompt = e;
+  document.getElementById("installBtn").style.display = "block";
+});
+window.addEventListener("appinstalled", () => {
+  document.getElementById("installBtn").style.display = "none";
+  toast("App installée 🎉");
+});
+function installApp() {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  installPrompt.userChoice.finally(() => {
+    installPrompt = null;
+    document.getElementById("installBtn").style.display = "none";
+  });
+}
 </script>
 </body>
 </html>

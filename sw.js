@@ -1,5 +1,5 @@
-const CACHE = "grattage-v4";
-const FILES = ["./", "index.html", "manifest.json", "icon.svg"];
+const CACHE = "grattage-v6";
+const FILES = ["./", "index.html", "manifest.json", "icon.svg", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)));

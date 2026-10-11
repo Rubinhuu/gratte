@@ -41,7 +41,7 @@
   .item{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
   .item:last-child{border:0}
   .item .t{font-weight:600} .item .s{color:var(--muted);font-size:12px;margin-top:2px}
-  .item .r{text-align:right;font-weight:700}
+  .item .r{text-align:right;font-weight:700;white-space:nowrap}
   .del{background:none;color:var(--muted);padding:4px 8px;font-size:18px}
   .tabs{position:fixed;bottom:0;left:0;right:0;display:flex;background:#08201a;border-top:1px solid var(--line);
        padding-bottom:env(safe-area-inset-bottom)}
@@ -56,6 +56,35 @@
        padding:10px 16px;border-radius:20px;font-weight:700;opacity:0;transition:.3s;pointer-events:none}
   #toast.on{opacity:1}
   #login{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;justify-content:center;padding:24px}
+  .tap{cursor:pointer}
+  .tap:active{opacity:.6}
+  .chev{color:var(--muted);margin-left:8px;font-size:18px}
+  .rank{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:28px;border-radius:14px;
+        background:var(--card2);color:var(--muted);font-size:12px;font-weight:800;margin-right:10px;flex:none}
+  .rank.top{background:var(--gold);color:#1b1400}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--card2);color:var(--muted)}
+  .hint{color:var(--muted);font-size:12px;margin-top:8px;line-height:1.4}
+  input[type=search]{margin-bottom:4px}
+  /* Fiche (bottom sheet) */
+  #sheetBg{position:fixed;inset:0;background:#0009;opacity:0;pointer-events:none;transition:.2s;z-index:20}
+  #sheetBg.on{opacity:1;pointer-events:auto}
+  #sheet{position:fixed;left:0;right:0;bottom:0;max-width:560px;margin:auto;max-height:88vh;overflow-y:auto;
+         background:var(--bg);border-radius:20px 20px 0 0;padding:8px 16px calc(24px + env(safe-area-inset-bottom));
+         transform:translateY(100%);transition:transform .25s;z-index:21;overscroll-behavior:contain}
+  #sheet.on{transform:none}
+  .grab{width:40px;height:5px;border-radius:3px;background:var(--card2);margin:4px auto 10px}
+  .shHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+  .shHead h3{font-size:21px}
+  .x{background:var(--card2);color:var(--txt);width:36px;height:36px;padding:0;border-radius:18px;font-size:18px;flex:none}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .grid2 .stat b{font-size:16px}
+  .ptab{width:100%;border-collapse:collapse;font-size:13px}
+  .ptab td{padding:6px 0;border-bottom:1px solid var(--line)}
+  .ptab td:nth-child(2),.ptab td:nth-child(3){text-align:right;color:var(--muted)}
+  .ptab tr:last-child td{border:0}
+  .how{line-height:1.5;font-size:14px}
+  a.link{color:var(--gold);font-weight:600;text-decoration:none}
+  #gameInfoLine{margin-top:6px}
 </style>
 </head>
 <body>
@@ -86,6 +115,7 @@
   <div class="card">
     <label>Jeu</label>
     <select id="game" onchange="onGameChange()"></select>
+    <div class="hint tap" id="gameInfoLine" onclick="openInfoByName(document.getElementById('game').value)"></div>
     <div class="row">
       <div><label>Prix unitaire (CHF)</label><input id="price" type="number" inputmode="decimal" step="0.5"></div>
       <div><label>Quantité</label><input id="qty" type="number" inputmode="numeric" value="1" min="1"></div>
@@ -112,6 +142,18 @@
 <div class="page" id="p-stats">
   <h1>📊 <span>Par jeu</span></h1>
   <div class="card" id="statsList"></div>
+  <p class="hint">Touche un jeu pour voir son historique.</p>
+</div>
+
+<!-- Page 4 : Infos jeux -->
+<div class="page" id="p-info">
+  <h1>ℹ️ <span>Infos jeux</span></h1>
+  <input type="search" id="infoSearch" placeholder="🔍 Rechercher un jeu" oninput="renderInfo()">
+  <div class="chips" id="infoSort"></div>
+  <p class="hint" id="infoHint"></p>
+  <div class="card" style="margin-top:10px" id="infoList"></div>
+  <p class="hint">Chiffres officiels des fiches « infobillet » de la Loterie Romande, calculés sur une série complète.
+    Le <b>taux de retour</b> est la part des mises redistribuée en gains : avec 60 %, sur CHF 100 misés, en moyenne CHF 60 reviennent aux joueurs.</p>
 </div>
 
 <!-- Page 4 : Jeux -->
@@ -141,17 +183,24 @@
   <button class="on" data-p="p-add" onclick="tab(this)">➕<br>Ajouter</button>
   <button data-p="p-hist" onclick="tab(this)">📜<br>Historique</button>
   <button data-p="p-stats" onclick="tab(this)">📊<br>Par jeu</button>
+  <button data-p="p-info" onclick="tab(this)">ℹ️<br>Infos</button>
   <button data-p="p-games" onclick="tab(this)">⚙️<br>Jeux</button>
 </div>
 <div id="toast"></div>
 
+<!-- Fiche qui monte du bas -->
+<div id="sheetBg" onclick="closeSheet()"></div>
+<div id="sheet"><div class="grab"></div><div id="sheetBody"></div></div>
+
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="jeux.js"></script>
 <script>
 // Jeux proposés au départ (tu peux en ajouter / modifier dans l'onglet Jeux)
 // Prix vérifiés dans les règlements officiels de la Loterie Romande (sept. 2026)
-const DEFAULTS_VERSION = 2;
+// v3 : + tous les billets des fiches infobillet (jeux.js)
+const DEFAULTS_VERSION = 3;
 const DEFAULT_GAMES = [
   { name: "10 000 Surprises", price: 1 },
   { name: "Tribolo", price: 2 },
@@ -173,6 +222,16 @@ const DEFAULT_GAMES = [
   { name: "Super Dico", price: 20 },
   { name: "Millionnaires", price: 100 }
 ];
+// Ajoute les billets des fiches officielles (sans doublon)
+for (const g of GAME_INFO) {
+  if (!DEFAULT_GAMES.some(d => key(d.name) === key(g.n))) DEFAULT_GAMES.push({ name: g.n, price: g.p });
+}
+
+// Clé de comparaison : sans majuscules, accents ni ponctuation ("Carton !" = "carton")
+function key(s) {
+  return String(s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
+}
+function infoFor(name) { return GAME_INFO.find(g => key(g.n) === key(name)) || null; }
 
 // ===== 1. CONFIG FIREBASE =====
 const firebaseConfig = {
@@ -201,7 +260,7 @@ function normalize(d) {
   // Ajoute les nouveaux jeux de la liste sans toucher à ceux déjà présents
   if ((d.defaultsVersion || 1) < DEFAULTS_VERSION) {
     for (const g of DEFAULT_GAMES) {
-      if (!d.games.some(x => x.name.toLowerCase() === g.name.toLowerCase())) d.games.push({ ...g });
+      if (!d.games.some(x => key(x.name) === key(g.name))) d.games.push({ ...g });
     }
     d.defaultsVersion = DEFAULTS_VERSION;
     changed = true;
@@ -338,7 +397,9 @@ function render() {
   renderTotals();
   renderHistory();
   renderStats();
+  renderInfo();
   renderGames();
+  if (sheetRefresh) sheetRefresh();
 }
 
 function renderGameSelect() {
@@ -363,6 +424,11 @@ function onGameChange() {
   let html = "";
   for (const a of amounts) html += `<button class="chip" onclick="setGain(${a})">${a}</button>`;
   document.getElementById("gainChips").innerHTML = html;
+  // Petite ligne d'info sous le choix du jeu
+  const info = g ? infoFor(g.name) : null;
+  document.getElementById("gameInfoLine").innerHTML = info
+    ? `Retour ${fmtPct(info.pay)} · 1 gagnant sur ${fmtOdds(info.s / info.w)} · gros lot ${fmtChf(info.top)} <span class="chev">›</span>`
+    : "";
 }
 
 function setGain(v) { document.getElementById("gain").value = v; }
@@ -433,17 +499,180 @@ function renderStats() {
   const rows = Object.keys(byGame).map(name => ({ name, ...totals(byGame[name]) }));
   rows.sort((a, b) => b.net - a.net);
   if (!rows.length) { document.getElementById("statsList").innerHTML = `<div class="empty">Pas encore de données</div>`; return; }
+  statsNames = rows.map(r => r.name);
   let html = "";
-  for (const r of rows) {
+  rows.forEach((r, i) => {
     const ret = r.spent ? Math.round(r.won / r.spent * 100) : 0;
-    html += `<div class="item" style="display:block">
-      <div style="display:flex;justify-content:space-between"><span class="t">${esc(r.name)}</span>
-      <span class="r ${r.net >= 0 ? "pos" : "neg"}">${sign(r.net)}${r.net.toFixed(2)}</span></div>
-      <div class="s">${r.count} billets · ${r.winners} gagnants · récupéré ${ret}% de la mise</div>
+    const info = infoFor(r.name);
+    html += `<div class="item tap" style="display:block" onclick="openGameHistory(statsNames[${i}])">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="t">${esc(r.name)}</span>
+      <span><span class="r ${r.net >= 0 ? "pos" : "neg"}">${sign(r.net)}${r.net.toFixed(2)}</span><span class="chev">›</span></span></div>
+      <div class="s">${r.count} billets · ${r.winners} gagnants · récupéré ${ret}% de la mise${info ? ` (moyenne officielle ${fmtPct(info.pay)})` : ""}</div>
       <div class="bar"><i style="width:${Math.min(ret, 100)}%"></i></div></div>`;
-  }
+  });
   document.getElementById("statsList").innerHTML = html;
 }
+let statsNames = [];
+
+// ===== HISTORIQUE D'UN JEU (fiche) =====
+function openGameHistory(name) {
+  openSheet(() => {
+    const list = data.tickets.filter(t => t.game === name)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    const t = totals(list);
+    const info = infoFor(name);
+    const ret = t.spent ? Math.round(t.won / t.spent * 100) : 0;
+    let h = `<div class="shHead"><h3>${esc(name)}</h3><button class="x" onclick="closeSheet()">✕</button></div>
+      <div class="card net"><div class="lbl">Mon bilan sur ce jeu</div>
+        <div class="val ${t.net >= 0 ? "pos" : "neg"}" style="font-size:32px">${sign(t.net)}CHF ${t.net.toFixed(2)}</div>
+        <div class="grid3">
+          <div class="stat"><b>${t.count}</b><small>Billets</small></div>
+          <div class="stat"><b>${t.spent.toFixed(0)}</b><small>Dépensé</small></div>
+          <div class="stat"><b>${t.won.toFixed(0)}</b><small>Gagné</small></div>
+        </div>
+        <p class="hint">Tu as récupéré <b>${ret} %</b> de ta mise${info ? ` — la moyenne officielle est de <b>${fmtPct(info.pay)}</b>` : ""}.</p>
+      </div>`;
+    if (info) h += `<button class="btn btn2" style="margin:0 0 12px" onclick="openInfoByName(${JSON.stringify(info.n).replace(/"/g, "&quot;")}, true)">ℹ️ Infos et règles du jeu</button>`;
+    h += `<div class="card">`;
+    if (!list.length) h += `<div class="empty">Aucun billet pour ce jeu</div>`;
+    for (const x of list) {
+      const net = x.gain - x.price * x.qty;
+      h += `<div class="item">
+        <div><div class="t">${fmtDate(x.date)}${x.qty > 1 ? " · ×" + x.qty : ""}</div>
+        <div class="s">mise ${(x.price * x.qty).toFixed(2)} · gain ${x.gain.toFixed(2)}</div></div>
+        <div style="display:flex;align-items:center"><div class="r ${net >= 0 ? "pos" : "neg"}">${sign(net)}${net.toFixed(2)}</div>
+        <button class="del" onclick="deleteTicket(${x.id})">×</button></div></div>`;
+    }
+    return h + `</div>`;
+  });
+}
+
+// ===== INFOS JEUX =====
+let infoSort = "pay";
+const SORTS = [
+  ["pay", "💰 Plus rentable", "Classé du taux de retour le plus élevé au plus bas."],
+  ["odds", "🍀 Plus de chances", "Classé selon la chance d'avoir un billet gagnant (n'importe quel gain)."],
+  ["price", "🏷️ Prix", "Classé du moins cher au plus cher."],
+  ["top", "🏆 Gros lot", "Classé selon le plus gros lot."]
+];
+let infoShown = [];
+
+function setInfoSort(k) { infoSort = k; renderInfo(); }
+
+function renderInfo() {
+  let chips = "";
+  for (const [k, l] of SORTS) chips += `<button class="chip ${infoSort === k ? "on" : ""}" onclick="setInfoSort('${k}')">${l}</button>`;
+  document.getElementById("infoSort").innerHTML = chips;
+  document.getElementById("infoHint").textContent = SORTS.find(s => s[0] === infoSort)[2];
+
+  const q = key(document.getElementById("infoSearch").value);
+  const cmp = {
+    pay: (a, b) => b.pay - a.pay || (a.s / a.w) - (b.s / b.w),
+    odds: (a, b) => (a.s / a.w) - (b.s / b.w) || b.pay - a.pay,
+    price: (a, b) => a.p - b.p || b.pay - a.pay,
+    top: (a, b) => b.top - a.top || b.pay - a.pay
+  }[infoSort];
+  // Le rang affiché est toujours celui de la rentabilité
+  const byPay = [...GAME_INFO].sort((a, b) => b.pay - a.pay || (a.s / a.w) - (b.s / b.w));
+  infoShown = [...GAME_INFO].sort(cmp).filter(g => !q || key(g.n).includes(q));
+
+  let html = "";
+  infoShown.forEach((g, i) => {
+    const rank = byPay.indexOf(g) + 1;
+    const mine = data.tickets.filter(t => key(t.game) === key(g.n));
+    html += `<div class="item tap" onclick="openInfo(infoShown[${i}])">
+      <div style="display:flex;align-items:center;min-width:0">
+        <span class="rank ${rank <= 3 ? "top" : ""}">${rank}</span>
+        <div style="min-width:0"><div class="t">${esc(g.n)} ${mine.length ? '<span class="pill">✓ joué</span>' : ""}</div>
+        <div class="s">CHF ${g.p} · 1 gagnant sur ${fmtOdds(g.s / g.w)} · gros lot ${fmtChf(g.top)}</div></div>
+      </div>
+      <div style="display:flex;align-items:center"><span class="r ${g.pay >= 65 ? "pos" : ""}">${fmtPct(g.pay)}</span><span class="chev">›</span></div>
+    </div>`;
+  });
+  document.getElementById("infoList").innerHTML = html || `<div class="empty">Aucun jeu trouvé</div>`;
+}
+
+function openInfoByName(name, replace) {
+  const g = infoFor(name);
+  if (!g) { if (name) toast("Pas de fiche officielle pour ce jeu"); return; }
+  openInfo(g, replace);
+}
+
+function openInfo(g, replace) {
+  openSheet(() => {
+    const rank = [...GAME_INFO].sort((a, b) => b.pay - a.pay || (a.s / a.w) - (b.s / b.w)).indexOf(g) + 1;
+    const mine = data.tickets.filter(t => key(t.game) === key(g.n));
+    const t = totals(mine);
+    const lossPer100 = 100 - g.pay;
+    let h = `<div class="shHead"><h3>${esc(g.n)}</h3><button class="x" onclick="closeSheet()">✕</button></div>
+      <div class="grid2">
+        <div class="stat"><b>CHF ${g.p}</b><small>Prix du billet</small></div>
+        <div class="stat"><b>${g.topText ? esc(g.topText) : fmtChf(g.top)}</b><small>Gros lot</small></div>
+        <div class="stat"><b class="${g.pay >= 65 ? "pos" : ""}">${fmtPct(g.pay)}</b><small>Taux de retour · ${rank}ᵉ sur ${GAME_INFO.length}</small></div>
+        <div class="stat"><b>1 sur ${fmtOdds(g.s / g.w)}</b><small>Billet gagnant (${fmtPct(g.w / g.s * 100)})</small></div>
+        <div class="stat"><b>${fmtInt(g.s)}</b><small>Billets par série</small></div>
+        <div class="stat"><b>${fmtInt(g.w)}</b><small>Billets gagnants</small></div>
+      </div>
+      <p class="hint">En moyenne, sur CHF 100 misés, CHF ${fmtNum(g.pay)} reviennent en gains : tu perds environ CHF ${fmtNum(lossPer100)}.
+        Environ ${fmtPct(g.w / g.s * 100)} des billets gagnent quelque chose, souvent juste le prix du billet.</p>`;
+    if (mine.length) {
+      const ret = t.spent ? Math.round(t.won / t.spent * 100) : 0;
+      h += `<div class="card tap" style="margin-top:12px" onclick="openGameHistory(${JSON.stringify(mine[0].game).replace(/"/g, "&quot;")})">
+        <div style="display:flex;justify-content:space-between;align-items:center"><span class="t">Mon bilan</span>
+        <span><span class="r ${t.net >= 0 ? "pos" : "neg"}">${sign(t.net)}${t.net.toFixed(2)}</span><span class="chev">›</span></span></div>
+        <div class="s" style="color:var(--muted);font-size:12px;margin-top:4px">${t.count} billets · récupéré ${ret} % (moyenne ${fmtPct(g.pay)})</div></div>`;
+    }
+    h += `<h2>Comment jouer</h2><div class="card how">${esc(g.how)}</div>`;
+    h += `<h2>Plan des lots</h2><div class="card"><table class="ptab">
+      <tr><td><b>Gain</b></td><td><b>Billets</b></td><td><b>Chance</b></td></tr>`;
+    for (const [a, c] of g.prizes) {
+      h += `<tr><td>${fmtChf(a)}</td><td>${fmtInt(c)}</td><td>1 sur ${fmtInt(Math.round(g.s / c))}</td></tr>`;
+    }
+    h += `</table>${g.note ? `<p class="hint">${esc(g.note)}</p>` : ""}</div>
+      <p class="hint">Série lancée le ${esc(g.l)}. Chiffres pour une série complète de ${fmtInt(g.s)} billets.
+        <a class="link" href="${g.url}" target="_blank" rel="noopener">Fiche officielle (PDF) ↗</a></p>
+      <button class="btn" onclick="buyGame(${JSON.stringify(g.n).replace(/"/g, "&quot;")})">🎟️ Enregistrer un billet ${esc(g.n)}</button>`;
+    return h;
+  }, replace);
+}
+
+// Ouvre la page Ajouter avec ce jeu présélectionné
+function buyGame(name) {
+  const g = data.games.find(x => key(x.name) === key(name));
+  if (!g) { toast("Jeu absent de ta liste"); return; }
+  closeSheet();
+  tab(document.querySelector('.tabs button[data-p="p-add"]'));
+  document.getElementById("game").value = g.name;
+  onGameChange();
+  window.scrollTo(0, 0);
+}
+
+// ===== FICHE (bottom sheet) + bouton retour Android =====
+let sheetRefresh = null;
+function openSheet(build, replace) {
+  sheetRefresh = () => { document.getElementById("sheetBody").innerHTML = build(); };
+  sheetRefresh();
+  const sh = document.getElementById("sheet");
+  sh.scrollTop = 0;
+  if (!sh.classList.contains("on")) {
+    sh.classList.add("on");
+    document.getElementById("sheetBg").classList.add("on");
+    history.pushState({ sheet: 1 }, "");
+  } else if (!replace) {
+    history.pushState({ sheet: 1 }, "");
+  }
+}
+function hideSheet() {
+  sheetRefresh = null;
+  document.getElementById("sheet").classList.remove("on");
+  document.getElementById("sheetBg").classList.remove("on");
+}
+function closeSheet() {
+  if (history.state && history.state.sheet) history.back(); else hideSheet();
+}
+window.addEventListener("popstate", () => {
+  if (!(history.state && history.state.sheet)) hideSheet();
+});
 
 function renderGames() {
   const sorted = [...data.games].sort((a, b) => a.price - b.price || a.name.localeCompare(b.name));
@@ -466,6 +695,11 @@ function tab(btn) {
 function today() { return new Date().toISOString().slice(0, 10); }
 function fmtDate(d) { const [y, m, j] = d.split("-"); return j + "." + m + "." + y; }
 function sign(n) { return n > 0 ? "+" : ""; }
+function fmtInt(n) { return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "'"); }
+function fmtChf(n) { return "CHF " + fmtInt(n); }
+function fmtNum(n) { return (Math.round(n * 10) / 10).toString(); }
+function fmtPct(n) { return fmtNum(n) + " %"; }
+function fmtOdds(n) { return n.toFixed(2); }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function toast(msg) {
   const t = document.getElementById("toast");

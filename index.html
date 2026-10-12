@@ -31,7 +31,7 @@
   label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
   select,input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card2);
        color:var(--txt);font-size:16px}
-  .row{display:flex;gap:8px} .row>*{flex:1}
+  .row{display:flex;gap:8px} .row>*{flex:1;min-width:0}
   button{border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:700;cursor:pointer}
   .btn{background:var(--gold);color:#1b1400;width:100%;margin-top:14px}
   .btn2{background:var(--card2);color:var(--txt)}
@@ -150,6 +150,7 @@
   <h1>ℹ️ <span>Infos jeux</span></h1>
   <input type="search" id="infoSearch" placeholder="🔍 Rechercher un jeu" oninput="renderInfo()">
   <div class="chips" id="infoSort"></div>
+  <div class="chips"><button class="chip" id="onSaleChip" onclick="toggleOnSale()">🟢 En vente seulement</button></div>
   <p class="hint" id="infoHint"></p>
   <div class="card" style="margin-top:10px" id="infoList"></div>
   <p class="hint">Chiffres officiels des fiches « infobillet » de la Loterie Romande, calculés sur une série complète.
@@ -165,6 +166,16 @@
       <div><label>Prix CHF</label><input id="newPrice" type="number" inputmode="decimal" step="0.5"></div>
     </div>
     <button class="btn" onclick="addGame()">Ajouter le jeu</button>
+  </div>
+  <h2>Nouveau jeu avec sa fiche</h2>
+  <div class="card">
+    <p class="hint" style="margin-top:0">Colle le lien du PDF « infobillet » du site Loro : l'app lit la fiche et remplit les infos (prix, gros lot, taux de retour, chances, dates, plan des lots, règles). Tu vérifies, puis tu enregistres.</p>
+    <label>Lien du PDF</label>
+    <input id="pdfUrl" type="url" placeholder="https://jeux.loro.ch/media/…pdf">
+    <button class="btn" onclick="readPdfFromUrl()">📄 Lire la fiche</button>
+    <p class="hint">Si le site bloque la lecture directe : télécharge le PDF puis choisis-le ici.</p>
+    <button class="btn btn2" onclick="document.getElementById('pdfFile').click()">📂 Choisir le PDF téléchargé</button>
+    <input type="file" id="pdfFile" accept="application/pdf,.pdf" style="display:none" onchange="readPdfFromFile(this)">
   </div>
   <div class="card" id="gamesList"></div>
   <h2>Sauvegarde</h2>
@@ -200,18 +211,36 @@
 // Jeux proposés : les billets des fiches officielles de la Loterie Romande (jeux.js)
 // v3 : ajout des fiches infobillet
 // v4 : retrait des anciens jeux e-billets non vendus en kiosque, Étoiles renommé Fidji
-const DEFAULTS_VERSION = 4;
+// v5 : noms alignés sur la liste officielle (53 jeux), + Super Dico Bonus
+const DEFAULTS_VERSION = 5;
 const DEFAULT_GAMES = GAME_INFO.map(g => ({ name: g.n, price: g.p }));
 // Jeux retirés en v4 (gardés automatiquement si un billet y est enregistré)
 const REMOVED_GAMES = ["10 000 Surprises", "Morpion", "Coup Double", "Ruche d'Or", "Océan",
   "Swiss Loto à gratter", "Super 20 ou 100", "Méga Mots Croisés", "Rento Deluxe", "Millionnaires"];
-const RENAMED_GAMES = { "Étoiles": "Fidji" };
+const RENAMED_GAMES = { "Étoiles": "Fidji", "Célébration 10 ans": "Célébration Bonus" };
 
 // Clé de comparaison : sans majuscules, accents ni ponctuation ("Carton !" = "carton")
 function key(s) {
   return String(s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
 }
-function infoFor(name) { return GAME_INFO.find(g => key(g.n) === key(name)) || null; }
+// Fiches : celles livrées avec l'app + celles que tu ajoutes toi-même (une fiche perso remplace l'officielle)
+function allInfo() {
+  // (Firestore n'accepte pas les tableaux imbriqués : les lots perso sont stockés en {a, c})
+  const custom = ((data && data.customInfo) || []).map(c => ({ ...c, perso: true,
+    prizes: (c.prizes || []).map(p => Array.isArray(p) ? p : [p.a, p.c]) }));
+  return GAME_INFO.filter(g => !custom.some(c => key(c.n) === key(g.n))).concat(custom);
+}
+function infoFor(name) { return allInfo().find(g => key(g.n) === key(name)) || null; }
+function rankByPay() { return allInfo().sort((a, b) => b.pay - a.pay || (a.s / a.w) - (b.s / b.w)); }
+
+// Statut de vente d'après les dates de la fiche
+function saleStatus(g) {
+  const now = today();
+  if (!g.fin) return { cls: "", short: "Permanent", long: "Jeu permanent : pas de date de fin de vente sur la fiche." };
+  const cad = g.cad ? ` Lots à réclamer jusqu'au ${fmtDate(g.cad)}.` : "";
+  if (g.fin >= now) return { cls: "pos", short: "En vente", long: `🟢 En vente jusqu'au ${fmtDate(g.fin)}.${cad}` };
+  return { cls: "neg", short: "Série terminée", long: `⚪ La série de cette fiche n'est plus en vente depuis le ${fmtDate(g.fin)} (le jeu peut revenir avec une nouvelle série).${g.cad && g.cad >= now ? cad : ""}` };
+}
 
 // ===== 1. CONFIG FIREBASE =====
 const firebaseConfig = {
@@ -239,14 +268,20 @@ function normalize(d) {
   let changed = false;
   // Ajoute les nouveaux jeux de la liste sans toucher à ceux déjà présents
   if ((d.defaultsVersion || 1) < DEFAULTS_VERSION) {
+    // Renommage (jeu + billets déjà enregistrés de ce jeu)
+    const rename = (from, to) => {
+      const hasTo = d.games.some(x => key(x.name) === key(to) && key(from) !== key(to));
+      d.games = d.games.filter(x => !(key(x.name) === key(from) && hasTo));
+      for (const x of d.games) if (key(x.name) === key(from)) x.name = to;
+      for (const t of d.tickets) if (key(t.game) === key(from)) t.game = to;
+    };
+    for (const [from, to] of Object.entries(RENAMED_GAMES)) rename(from, to);
+    // Orthographe officielle (ex. "Carton" → "Carton!", "Starmax" → "Star Max")
+    for (const g of GAME_INFO) {
+      const x = d.games.find(x => key(x.name) === key(g.n) && x.name !== g.n);
+      if (x) rename(x.name, g.n);
+    }
     if ((d.defaultsVersion || 1) < 4) {
-      // Renommage (jeu + billets déjà enregistrés de ce jeu)
-      for (const [from, to] of Object.entries(RENAMED_GAMES)) {
-        const hasTo = d.games.some(x => key(x.name) === key(to));
-        d.games = d.games.filter(x => !(key(x.name) === key(from) && hasTo));
-        for (const x of d.games) if (key(x.name) === key(from)) x.name = to;
-        for (const t of d.tickets) if (key(t.game) === key(from)) t.game = to;
-      }
       // Retrait des jeux hors liste, sauf s'ils ont des billets
       const played = new Set(d.tickets.map(t => key(t.game)));
       const removed = new Set(REMOVED_GAMES.map(key));
@@ -551,6 +586,8 @@ const SORTS = [
 let infoShown = [];
 
 function setInfoSort(k) { infoSort = k; renderInfo(); }
+let onSaleOnly = false;
+function toggleOnSale() { onSaleOnly = !onSaleOnly; renderInfo(); }
 
 function renderInfo() {
   let chips = "";
@@ -565,19 +602,25 @@ function renderInfo() {
     price: (a, b) => a.p - b.p || b.pay - a.pay,
     top: (a, b) => b.top - a.top || b.pay - a.pay
   }[infoSort];
+  // Filtre "en vente"
+  document.getElementById("onSaleChip").className = "chip" + (onSaleOnly ? " on" : "");
   // Le rang affiché est toujours celui de la rentabilité
-  const byPay = [...GAME_INFO].sort((a, b) => b.pay - a.pay || (a.s / a.w) - (b.s / b.w));
-  infoShown = [...GAME_INFO].sort(cmp).filter(g => !q || key(g.n).includes(q));
+  const byPay = rankByPay().map(g => key(g.n));
+  infoShown = allInfo().sort(cmp)
+    .filter(g => !q || key(g.n).includes(q))
+    .filter(g => !onSaleOnly || saleStatus(g).short !== "Série terminée");
 
   let html = "";
   infoShown.forEach((g, i) => {
-    const rank = byPay.indexOf(g) + 1;
+    const rank = byPay.indexOf(key(g.n)) + 1;
     const mine = data.tickets.filter(t => key(t.game) === key(g.n));
+    const st = saleStatus(g);
     html += `<div class="item tap" onclick="openInfo(infoShown[${i}])">
       <div style="display:flex;align-items:center;min-width:0">
         <span class="rank ${rank <= 3 ? "top" : ""}">${rank}</span>
-        <div style="min-width:0"><div class="t">${esc(g.n)} ${mine.length ? '<span class="pill">✓ joué</span>' : ""}</div>
-        <div class="s">CHF ${g.p} · 1 gagnant sur ${fmtOdds(g.s / g.w)} · gros lot ${fmtChf(g.top)}</div></div>
+        <div style="min-width:0"><div class="t">${esc(g.n)} ${mine.length ? '<span class="pill">✓ joué</span>' : ""}${g.perso ? ' <span class="pill">perso</span>' : ""}</div>
+        <div class="s">CHF ${g.p} · 1 gagnant sur ${fmtOdds(g.s / g.w)} · gros lot ${fmtChf(g.top)}</div>
+        <div class="s"><span class="${st.cls}">${st.short === "Série terminée" ? "⚪ Série terminée" : st.short === "En vente" ? "🟢 En vente jusqu'au " + fmtDate(g.fin) : "🟢 Jeu permanent"}</span></div></div>
       </div>
       <div style="display:flex;align-items:center"><span class="r ${g.pay >= 65 ? "pos" : ""}">${fmtPct(g.pay)}</span><span class="chev">›</span></div>
     </div>`;
@@ -591,17 +634,22 @@ function openInfoByName(name, replace) {
   openInfo(g, replace);
 }
 
-function openInfo(g, replace) {
+function openInfo(g0, replace) {
+  const k = key(g0.n);
   openSheet(() => {
-    const rank = [...GAME_INFO].sort((a, b) => b.pay - a.pay || (a.s / a.w) - (b.s / b.w)).indexOf(g) + 1;
-    const mine = data.tickets.filter(t => key(t.game) === key(g.n));
+    const g = infoFor(k) || g0;
+    const ranking = rankByPay();
+    const rank = ranking.findIndex(x => key(x.n) === k) + 1;
+    const mine = data.tickets.filter(t => key(t.game) === k);
     const t = totals(mine);
     const lossPer100 = 100 - g.pay;
+    const st = saleStatus(g);
     let h = `<div class="shHead"><h3>${esc(g.n)}</h3><button class="x" onclick="closeSheet()">✕</button></div>
+      <div class="card" style="padding:12px 14px"><span class="${st.cls}" style="font-weight:600">${st.long}</span></div>
       <div class="grid2">
         <div class="stat"><b>CHF ${g.p}</b><small>Prix du billet</small></div>
         <div class="stat"><b>${g.topText ? esc(g.topText) : fmtChf(g.top)}</b><small>Gros lot</small></div>
-        <div class="stat"><b class="${g.pay >= 65 ? "pos" : ""}">${fmtPct(g.pay)}</b><small>Taux de retour · ${rank}ᵉ sur ${GAME_INFO.length}</small></div>
+        <div class="stat"><b class="${g.pay >= 65 ? "pos" : ""}">${fmtPct(g.pay)}</b><small>Taux de retour · ${rank}ᵉ sur ${ranking.length}</small></div>
         <div class="stat"><b>1 sur ${fmtOdds(g.s / g.w)}</b><small>Billet gagnant (${fmtPct(g.w / g.s * 100)})</small></div>
         <div class="stat"><b>${fmtInt(g.s)}</b><small>Billets par série</small></div>
         <div class="stat"><b>${fmtInt(g.w)}</b><small>Billets gagnants</small></div>
@@ -615,16 +663,20 @@ function openInfo(g, replace) {
         <span><span class="r ${t.net >= 0 ? "pos" : "neg"}">${sign(t.net)}${t.net.toFixed(2)}</span><span class="chev">›</span></span></div>
         <div class="s" style="color:var(--muted);font-size:12px;margin-top:4px">${t.count} billets · récupéré ${ret} % (moyenne ${fmtPct(g.pay)})</div></div>`;
     }
-    h += `<h2>Comment jouer</h2><div class="card how">${esc(g.how)}</div>`;
-    h += `<h2>Plan des lots</h2><div class="card"><table class="ptab">
-      <tr><td><b>Gain</b></td><td><b>Billets</b></td><td><b>Chance</b></td></tr>`;
-    for (const [a, c] of g.prizes) {
-      h += `<tr><td>${fmtChf(a)}</td><td>${fmtInt(c)}</td><td>1 sur ${fmtInt(Math.round(g.s / c))}</td></tr>`;
+    if (g.how) h += `<h2>Comment jouer</h2><div class="card how">${esc(g.how)}</div>`;
+    if (g.prizes && g.prizes.length) {
+      h += `<h2>Plan des lots</h2><div class="card"><table class="ptab">
+        <tr><td><b>Gain</b></td><td><b>Billets</b></td><td><b>Chance</b></td></tr>`;
+      for (const [a, c] of g.prizes) {
+        h += `<tr><td>${fmtChf(a)}</td><td>${fmtInt(c)}</td><td>1 sur ${fmtInt(Math.round(g.s / c))}</td></tr>`;
+      }
+      h += `</table>${g.note ? `<p class="hint">${esc(g.note)}</p>` : ""}</div>`;
     }
-    h += `</table>${g.note ? `<p class="hint">${esc(g.note)}</p>` : ""}</div>
-      <p class="hint">Série lancée le ${esc(g.l)}. Chiffres pour une série complète de ${fmtInt(g.s)} billets.
-        <a class="link" href="${g.url}" target="_blank" rel="noopener">Fiche officielle (PDF) ↗</a></p>
+    h += `<p class="hint">${g.l ? `Série lancée le ${esc(g.l)}. ` : ""}Chiffres pour une série complète de ${fmtInt(g.s)} billets.
+        ${/^https?:\/\//.test(g.url || "") ? `<a class="link" href="${esc(g.url)}" target="_blank" rel="noopener">Fiche officielle (PDF) ↗</a>` : ""}
+        ${g.perso ? "<br>Fiche ajoutée par toi depuis le PDF." : ""}</p>
       <button class="btn" onclick="buyGame(${JSON.stringify(g.n).replace(/"/g, "&quot;")})">🎟️ Enregistrer un billet ${esc(g.n)}</button>`;
+    if (g.perso) h += `<button class="btn btn2" onclick="deleteCustomInfo(${JSON.stringify(g.n).replace(/"/g, "&quot;")})">🗑️ Supprimer cette fiche perso</button>`;
     return h;
   }, replace);
 }
@@ -640,11 +692,204 @@ function buyGame(name) {
   window.scrollTo(0, 0);
 }
 
+// ===== NOUVEAU JEU : LECTURE AUTOMATIQUE DE LA FICHE PDF =====
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+let pdfjsReady = null;
+function loadPdfJs() {
+  if (!pdfjsReady) pdfjsReady = new Promise((ok, ko) => {
+    const s = document.createElement("script");
+    s.src = PDFJS + "pdf.min.js";
+    s.onload = () => { pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js"; ok(); };
+    s.onerror = () => { pdfjsReady = null; ko(new Error("Lecteur PDF introuvable (pas de réseau ?)")); };
+    document.head.appendChild(s);
+  });
+  return pdfjsReady;
+}
+
+// Texte du PDF, ligne par ligne (les morceaux sur la même hauteur forment une ligne)
+async function pdfLines(buffer) {
+  await loadPdfJs();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const tc = await (await pdf.getPage(p)).getTextContent();
+    const rows = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const y = it.transform[5], x = it.transform[4];
+      let row = rows.find(r => Math.abs(r.y - y) < 2.5);
+      if (!row) { row = { y, parts: [] }; rows.push(row); }
+      row.parts.push({ x, s: it.str });
+    }
+    rows.sort((a, b) => b.y - a.y);
+    for (const r of rows) lines.push(r.parts.sort((a, b) => a.x - b.x).map(t => t.s).join(" ").replace(/\s+/g, " ").trim());
+  }
+  return lines.map(l => l.replace(/[’‘`´]/g, "'"));
+}
+
+const MONTHS = { janvier: 1, fevrier: 2, mars: 3, avril: 4, mai: 5, juin: 6, juillet: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12 };
+const DATE_RE = "(\\d{1,2}(?:er)?\\s+[A-Za-zÀ-ÿ]+\\s+\\d{4}|[A-Za-zÀ-ÿ]+\\s+\\d{4})";
+function frToIso(s) {
+  const m = String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").match(/(\d{1,2})(?:er)?\s+([a-z]+)\s+(\d{4})/);
+  if (!m || !MONTHS[m[2]]) return null;
+  return `${m[3]}-${String(MONTHS[m[2]]).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+}
+function num(s) { return parseFloat(String(s).replace(/['\s]/g, "").replace(/\.-$|-$/, "").replace(",", ".")); }
+
+function parseInfobillet(lines) {
+  const text = lines.join("\n");
+  const grab = re => { const m = text.match(re); return m ? m[1] : null; };
+  const out = {};
+  out.p = num(grab(/Prix du billet\s*:?\s*(?:Fr\.?|CHF)?\s*(\d+(?:[.,]\d+)?)/i));
+  out.s = num(grab(/Nombre de billets\s*:?\s*(\d{1,3}(?:['\s]?\d{3})+|\d+)/i));
+  out.pay = num(grab(/Taux de redistribution[^:\n]*:?\s*(\d+(?:[.,]\d+)?)\s*%/i));
+  out.l = grab(new RegExp("Lancement de la s[ée]rie\\s*:?\\s*" + DATE_RE, "i")) || "";
+  out.fin = frToIso(grab(new RegExp("Date limite de vente\\s*:?\\s*" + DATE_RE, "i")));
+  out.cad = frToIso(grab(new RegExp("Caducit[ée] des lots\\s*:?\\s*" + DATE_RE, "i")));
+
+  // Méthode de jeu → texte jusqu'à la section suivante
+  const mjLine = lines.findIndex(l => /M[ée]thode de jeu/i.test(l));
+  if (mjLine >= 0) {
+    let how = "";
+    for (const l of lines.slice(mjLine)) {
+      const s = l.replace(/^.*M[ée]thode de jeu\s*:?/i, "").trim();
+      if (!s) continue;
+      if (/^(LoRo\s*\/|Plan des lots|Lots\s+Composition|Taux de redistribution|Nombre de billets|Prix du billet|Caducit|Date limite|TOTAUX)/i.test(s)) break;
+      if (/Exemple de billet gagnant/i.test(s)) continue;         // renvoie à une image du PDF
+      how = /-$/.test(how) ? how.replace(/\s*-$/, "") + s : (how ? how + " " : "") + s;   // mots coupés en fin de ligne
+    }
+    out.how = how.replace(/\s*►\s*/g, " ").replace(/\s+/g, " ").trim().slice(0, 900);
+  }
+
+  // Plan des lots : seulement entre l'en-tête du tableau et TOTAUX
+  // une ligne = lot, (composition), nombre, valeur totale (= lot × nombre)
+  const prizes = {};
+  let inTable = false;
+  for (const line of lines) {
+    if (!inTable) { if (/Lots\s+Composition|Valeur totale/i.test(line)) inTable = true; continue; }
+    if (/TOTA|M[ée]thode de jeu/i.test(line)) break;
+    const toks = (line.match(/\d{1,3}(?:'\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g) || []).map(num);
+    if (toks.length < 3) continue;
+    const a = toks[0];
+    if (!(a > 0)) continue;
+    let found = null;
+    for (let j = 1; j < toks.length && !found; j++) {
+      const c = toks[j];
+      if (!Number.isInteger(c) || c < 1 || (out.s && c > out.s)) continue;
+      for (let k = j + 1; k < toks.length; k++) {
+        if (Math.abs(toks[k] - a * c) <= Math.max(0.5, a * c * 0.001)) { found = c; break; }
+      }
+    }
+    if (found) prizes[a] = (prizes[a] || 0) + found;
+  }
+  out.prizes = Object.entries(prizes).map(([a, c]) => [Number(a), c]).sort((x, y) => y[0] - x[0]);
+  const sumC = out.prizes.reduce((t, [, c]) => t + c, 0);
+  out.w = sumC || NaN;
+  out.top = num(grab(/Gros lot\s*:?\s*(?:Fr\.?|CHF)?\s*([\d']+)/i)) || (out.prizes.length ? out.prizes[0][0] : NaN);
+  if (!(out.pay > 0) && out.p && out.s && out.prizes.length) {
+    out.pay = Math.round(out.prizes.reduce((t, [a, c]) => t + a * c, 0) / (out.p * out.s) * 1000) / 10;
+  }
+  return out;
+}
+
+// Nom proposé d'après le nom du fichier : "26_07_21_tropical_infobillet_fr.pdf" → "Tropical"
+function nameFromFile(s) {
+  let n = decodeURIComponent(String(s).split("/").pop().split("#")[0].split("?")[0]).replace(/\.pdf$/i, "");
+  n = n.replace(/^[\d_\-]+/, "").replace(/_?(infobillet|infobille|web|webvf|webfr|fr|eg|des\d+|v\d+|[0-9a-f]{20,}|\d+)(?=_|-|$)/gi, "")
+       .replace(/[_\-]+/g, " ").trim();
+  return n.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function readPdfFromUrl() {
+  const url = document.getElementById("pdfUrl").value.trim().split("#")[0];
+  if (!/^https?:\/\//.test(url)) { toast("Colle d'abord le lien du PDF"); return; }
+  toast("Lecture de la fiche…");
+  let buf;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    buf = await r.arrayBuffer();
+  } catch (e) {
+    alert("Le site Loro ne laisse pas l'app lire ce lien directement.\n\nTélécharge le PDF (ouvre le lien → télécharger), puis appuie sur « Choisir le PDF téléchargé ».");
+    return;
+  }
+  analysePdf(buf, url, nameFromFile(url));
+}
+
+function readPdfFromFile(input) {
+  const f = input.files[0];
+  if (!f) return;
+  const url = document.getElementById("pdfUrl").value.trim().split("#")[0];
+  f.arrayBuffer().then(buf => analysePdf(buf, url, nameFromFile(url || f.name)));
+  input.value = "";
+}
+
+async function analysePdf(buf, url, guessName) {
+  try {
+    const info = parseInfobillet(await pdfLines(buf));
+    const typed = document.getElementById("newName").value.trim();
+    info.n = typed || guessName;
+    info.url = url || "";
+    showPdfPreview(info);
+  } catch (e) {
+    alert("Impossible de lire ce PDF : " + e.message);
+  }
+}
+
+// Fiche pré-remplie à vérifier avant d'enregistrer
+let pdfDraft = null;
+function showPdfPreview(info) {
+  pdfDraft = info;
+  const f = (id, label, val, type = "text") =>
+    `<label>${label}</label><input id="pv_${id}" type="${type}" ${type === "number" ? 'inputmode="decimal" step="any"' : ""} value="${esc(val == null || Number.isNaN(val) ? "" : val)}">`;
+  const missing = ["p", "s", "w", "pay"].filter(k => !(info[k] > 0));
+  openSheet(() => `<div class="shHead"><h3>Vérifie la fiche</h3><button class="x" onclick="closeSheet()">✕</button></div>
+    ${missing.length ? `<div class="card neg" style="padding:12px">⚠️ Certaines infos n'ont pas pu être lues : complète les cases vides.</div>`
+                     : `<div class="card pos" style="padding:12px">✓ Fiche lue. Vérifie rapidement puis enregistre.</div>`}
+    <div class="card">
+      ${f("n", "Nom du jeu", info.n)}
+      <div class="row"><div>${f("p", "Prix CHF", info.p, "number")}</div><div>${f("top", "Gros lot CHF", info.top, "number")}</div></div>
+      <div class="row"><div>${f("s", "Billets par série", info.s, "number")}</div><div>${f("w", "Billets gagnants", info.w, "number")}</div></div>
+      <div class="row"><div>${f("pay", "Taux de retour %", info.pay, "number")}</div><div>${f("l", "Lancement", info.l)}</div></div>
+      <div class="row"><div>${f("fin", "Fin de vente", info.fin, "date")}</div><div>${f("cad", "Lots payables jusqu'au", info.cad, "date")}</div></div>
+      <label>Comment jouer</label>
+      <textarea id="pv_how" rows="5" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--txt);font-size:15px;font-family:inherit">${esc(info.how || "")}</textarea>
+      <p class="hint">Plan des lots : ${info.prizes.length} gains trouvés${info.prizes.length ? ` (de ${fmtChf(info.prizes[info.prizes.length - 1][0])} à ${fmtChf(info.prizes[0][0])})` : ""}.</p>
+    </div>
+    <button class="btn" onclick="saveCustomInfo()">💾 Enregistrer le jeu et sa fiche</button>`, false, true);
+}
+
+function saveCustomInfo() {
+  const v = id => document.getElementById("pv_" + id).value.trim();
+  const n = v("n"), p = num(v("p")), s = num(v("s")), w = num(v("w")), pay = num(v("pay")), top = num(v("top"));
+  if (!n || !(p > 0) || !(s > 0) || !(w > 0) || !(pay > 0)) { toast("Nom, prix, billets, gagnants et taux sont requis"); return; }
+  const fiche = { n, p, top: top > 0 ? top : 0, s, w, pay, l: v("l"), fin: v("fin") || null, cad: v("cad") || null,
+    url: pdfDraft.url || "", how: v("how"), prizes: (pdfDraft.prizes || []).map(([a, c]) => ({ a, c })) };
+  if (!data.customInfo) data.customInfo = [];
+  data.customInfo = data.customInfo.filter(c => key(c.n) !== key(n)).concat(fiche);
+  const g = data.games.find(x => key(x.name) === key(n));
+  if (g) g.price = p; else data.games.push({ name: n, price: p });
+  save();
+  closeSheet();
+  document.getElementById("pdfUrl").value = "";
+  document.getElementById("newName").value = "";
+  toast("Jeu et fiche enregistrés");
+}
+
+function deleteCustomInfo(name) {
+  if (!confirm("Supprimer ta fiche perso « " + name + " » ? (le jeu et tes billets restent)")) return;
+  data.customInfo = (data.customInfo || []).filter(c => key(c.n) !== key(name));
+  save();
+  closeSheet();
+}
+
 // ===== FICHE (bottom sheet) + bouton retour Android =====
 let sheetRefresh = null;
-function openSheet(build, replace) {
-  sheetRefresh = () => { document.getElementById("sheetBody").innerHTML = build(); };
-  sheetRefresh();
+function openSheet(build, replace, isForm) {
+  const draw = () => { document.getElementById("sheetBody").innerHTML = build(); };
+  draw();
+  // Un formulaire n'est pas redessiné pendant la saisie (sinon la synchro effacerait ce qu'on tape)
+  sheetRefresh = isForm ? null : draw;
   const sh = document.getElementById("sheet");
   sh.scrollTop = 0;
   if (!sh.classList.contains("on")) {

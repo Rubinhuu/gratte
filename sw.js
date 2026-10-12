@@ -1,4 +1,4 @@
-const CACHE = "grattage-v9";
+const CACHE = "grattage-v11";
 const FILES = ["./", "index.html", "jeux.js", "manifest.json", "icon.svg", "icon2-192.png", "icon2-512.png", "icon2-maskable-512.png"];
 
 self.addEventListener("install", e => {

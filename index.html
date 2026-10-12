@@ -197,35 +197,15 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="jeux.js"></script>
 <script>
-// Jeux proposés au départ (tu peux en ajouter / modifier dans l'onglet Jeux)
-// Prix vérifiés dans les règlements officiels de la Loterie Romande (sept. 2026)
-// v3 : + tous les billets des fiches infobillet (jeux.js)
-const DEFAULTS_VERSION = 3;
-const DEFAULT_GAMES = [
-  { name: "10 000 Surprises", price: 1 },
-  { name: "Tribolo", price: 2 },
-  { name: "Le Chanceux", price: 3 },
-  { name: "Morpion", price: 3 },
-  { name: "Le Magot", price: 4 },
-  { name: "Coup Double", price: 4 },
-  { name: "Ruche d'Or", price: 4 },
-  { name: "Solo", price: 5 },
-  { name: "Océan", price: 5 },
-  { name: "Swiss Loto à gratter", price: 5 },
-  { name: "Podium", price: 6 },
-  { name: "Dico", price: 7 },
-  { name: "Rento", price: 8 },
-  { name: "Super 20 ou 100", price: 10 },
-  { name: "Méga Mots Croisés", price: 12 },
-  { name: "Rento Deluxe", price: 15 },
-  { name: "Carton", price: 20 },
-  { name: "Super Dico", price: 20 },
-  { name: "Millionnaires", price: 100 }
-];
-// Ajoute les billets des fiches officielles (sans doublon)
-for (const g of GAME_INFO) {
-  if (!DEFAULT_GAMES.some(d => key(d.name) === key(g.n))) DEFAULT_GAMES.push({ name: g.n, price: g.p });
-}
+// Jeux proposés : les billets des fiches officielles de la Loterie Romande (jeux.js)
+// v3 : ajout des fiches infobillet
+// v4 : retrait des anciens jeux e-billets non vendus en kiosque, Étoiles renommé Fidji
+const DEFAULTS_VERSION = 4;
+const DEFAULT_GAMES = GAME_INFO.map(g => ({ name: g.n, price: g.p }));
+// Jeux retirés en v4 (gardés automatiquement si un billet y est enregistré)
+const REMOVED_GAMES = ["10 000 Surprises", "Morpion", "Coup Double", "Ruche d'Or", "Océan",
+  "Swiss Loto à gratter", "Super 20 ou 100", "Méga Mots Croisés", "Rento Deluxe", "Millionnaires"];
+const RENAMED_GAMES = { "Étoiles": "Fidji" };
 
 // Clé de comparaison : sans majuscules, accents ni ponctuation ("Carton !" = "carton")
 function key(s) {
@@ -259,6 +239,19 @@ function normalize(d) {
   let changed = false;
   // Ajoute les nouveaux jeux de la liste sans toucher à ceux déjà présents
   if ((d.defaultsVersion || 1) < DEFAULTS_VERSION) {
+    if ((d.defaultsVersion || 1) < 4) {
+      // Renommage (jeu + billets déjà enregistrés de ce jeu)
+      for (const [from, to] of Object.entries(RENAMED_GAMES)) {
+        const hasTo = d.games.some(x => key(x.name) === key(to));
+        d.games = d.games.filter(x => !(key(x.name) === key(from) && hasTo));
+        for (const x of d.games) if (key(x.name) === key(from)) x.name = to;
+        for (const t of d.tickets) if (key(t.game) === key(from)) t.game = to;
+      }
+      // Retrait des jeux hors liste, sauf s'ils ont des billets
+      const played = new Set(d.tickets.map(t => key(t.game)));
+      const removed = new Set(REMOVED_GAMES.map(key));
+      d.games = d.games.filter(x => !removed.has(key(x.name)) || played.has(key(x.name)));
+    }
     for (const g of DEFAULT_GAMES) {
       if (!d.games.some(x => key(x.name) === key(g.name))) d.games.push({ ...g });
     }

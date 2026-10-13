@@ -112,7 +112,11 @@
     </div>
   </div>
 
+  <button class="btn" style="margin:0 0 12px" onclick="startVerif()">📷 Vérifier un billet en photo</button>
+  <input type="file" id="verifFile" accept="image/*" style="display:none" onchange="onVerifPhoto(this)">
+
   <div class="card">
+    <div class="hint" id="verifNote" style="display:none;margin:0 0 6px;color:var(--gold)"></div>
     <label>Jeu</label>
     <select id="game" onchange="onGameChange()"></select>
     <div class="hint tap" id="gameInfoLine" onclick="openInfoByName(document.getElementById('game').value)"></div>
@@ -178,6 +182,15 @@
     <input type="file" id="pdfFile" accept="application/pdf,.pdf" style="display:none" onchange="readPdfFromFile(this)">
   </div>
   <div class="card" id="gamesList"></div>
+  <h2>Vérification photo</h2>
+  <div class="card">
+    <p class="hint" style="margin-top:0">Réglages enregistrés sur ce téléphone uniquement.</p>
+    <label>Adresse du relais</label>
+    <input id="verifUrl" type="url" onchange="saveVerifSettings()">
+    <label>Mot de passe du relais (APP_CODE)</label>
+    <input id="verifCode" type="password" autocomplete="off" onchange="saveVerifSettings()">
+    <button class="btn btn2" onclick="testVerif()">🔌 Tester la connexion</button>
+  </div>
   <h2>Sauvegarde</h2>
   <div class="card">
     <p class="s" style="color:var(--muted);font-size:13px">Les données sont synchronisées en ligne. L'export te donne en plus une copie de secours en fichier.</p>
@@ -387,10 +400,13 @@ function addTicket() {
   const date = document.getElementById("date").value || today();
   if (!game) { toast("Ajoute d'abord un jeu"); return; }
 
-  data.tickets.push({ id: Date.now(), game, price, qty, gain, date });
+  const t = { id: Date.now(), game, price, qty, gain, date };
+  if (verifPending) t.verif = verifPending;     // résumé de la vérification photo
+  data.tickets.push(t);
   save();
   document.getElementById("gain").value = "";
   document.getElementById("qty").value = 1;
+  setVerifPending(null);
   toast(gain > 0 ? "🎉 Gain enregistré !" : "Enregistré");
 }
 
@@ -509,7 +525,7 @@ function renderHistory() {
     const net = x.gain - x.price * x.qty;
     html += `<div class="item">
       <div><div class="t">${esc(x.game)}${x.qty > 1 ? " ×" + x.qty : ""}</div>
-      <div class="s">${fmtDate(x.date)} · mise ${(x.price * x.qty).toFixed(2)} · gain ${x.gain.toFixed(2)}</div></div>
+      <div class="s">${fmtDate(x.date)} · mise ${(x.price * x.qty).toFixed(2)} · gain ${x.gain.toFixed(2)}${x.verif ? " · 🔍" : ""}</div></div>
       <div style="display:flex;align-items:center"><div class="r ${net >= 0 ? "pos" : "neg"}">${sign(net)}${net.toFixed(2)}</div>
       <button class="del" onclick="deleteTicket(${x.id})">×</button></div></div>`;
   }
@@ -567,7 +583,8 @@ function openGameHistory(name) {
       const net = x.gain - x.price * x.qty;
       h += `<div class="item">
         <div><div class="t">${fmtDate(x.date)}${x.qty > 1 ? " · ×" + x.qty : ""}</div>
-        <div class="s">mise ${(x.price * x.qty).toFixed(2)} · gain ${x.gain.toFixed(2)}</div></div>
+        <div class="s">mise ${(x.price * x.qty).toFixed(2)} · gain ${x.gain.toFixed(2)}</div>
+        ${x.verif ? `<div class="s">🔍 ${esc(x.verif)}</div>` : ""}</div>
         <div style="display:flex;align-items:center"><div class="r ${net >= 0 ? "pos" : "neg"}">${sign(net)}${net.toFixed(2)}</div>
         <button class="del" onclick="deleteTicket(${x.id})">×</button></div></div>`;
     }
@@ -883,6 +900,199 @@ function deleteCustomInfo(name) {
   closeSheet();
 }
 
+// ===== VÉRIFICATION D'UN BILLET PAR PHOTO (via le relais Cloudflare → Claude) =====
+const VERIF_URL_DEFAULT = "https://grattage-verif.r-s-antunes-10-08.workers.dev";
+const VERIF_PRICE_IN = 2, VERIF_PRICE_OUT = 10;      // $ par million de jetons (Claude Sonnet 5)
+const VERIF_MAX_PHOTOS = 3;
+let verifPhotos = [];
+let verifPending = null;
+let verifResult = null;
+
+function lsGet(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function verifUrl() { return (lsGet("grattage_verif_url") || VERIF_URL_DEFAULT).replace(/\/+$/, ""); }
+function loadVerifSettings() {
+  document.getElementById("verifUrl").value = verifUrl();
+  document.getElementById("verifCode").value = lsGet("grattage_verif_code");
+}
+function saveVerifSettings() {
+  lsSet("grattage_verif_url", document.getElementById("verifUrl").value.trim());
+  lsSet("grattage_verif_code", document.getElementById("verifCode").value.trim());
+  toast("Réglages enregistrés");
+}
+
+async function testVerif() {
+  saveVerifSettings();
+  try {
+    const r = await fetch(verifUrl());
+    const j = await r.json();
+    const ok = j.cle_api === "présente" && j.code_app === "présent";
+    alert(ok ? "✅ Relais joignable, clé et code en place.\n(Le mot de passe sera vérifié lors de la 1ʳᵉ analyse.)"
+             : "⚠️ Relais joignable mais incomplet :\n" + JSON.stringify(j, null, 1));
+  } catch (e) {
+    alert("❌ Impossible de joindre le relais. Vérifie l'adresse.\n" + e.message);
+  }
+}
+
+function setVerifPending(text) {
+  verifPending = text;
+  const el = document.getElementById("verifNote");
+  el.style.display = text ? "block" : "none";
+  el.textContent = text ? "🔍 Rempli par la vérification photo : contrôle puis appuie sur Enregistrer." : "";
+}
+
+function startVerif() {
+  if (!lsGet("grattage_verif_code")) {
+    tab(document.querySelector('.tabs button[data-p="p-games"]'));
+    setTimeout(() => document.getElementById("verifCode").scrollIntoView({ behavior: "smooth", block: "center" }), 100);
+    toast("Entre d'abord le mot de passe du relais");
+    return;
+  }
+  verifPhotos = [];
+  document.getElementById("verifFile").click();
+}
+
+// Réduit la photo (côté long ≤ 2576 px, la résolution max lue par Claude) et la convertit en JPEG
+async function shrinkPhoto(file) {
+  let src;
+  try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch (e) {
+    src = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = URL.createObjectURL(file); });
+  }
+  const w = src.width, h = src.height, k = Math.min(1, 2576 / Math.max(w, h));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.88);
+}
+
+async function onVerifPhoto(input) {
+  const f = input.files[0];
+  input.value = "";
+  if (!f) return;
+  try { verifPhotos.push(await shrinkPhoto(f)); }
+  catch (e) { alert("Photo illisible : " + e.message); return; }
+  showVerifPhotos();
+}
+
+function showVerifPhotos() {
+  openSheet(() => `<div class="shHead"><h3>Vérifier un billet</h3><button class="x" onclick="closeSheet()">✕</button></div>
+    <div class="row" style="flex-wrap:wrap">${verifPhotos.map((p, i) =>
+      `<div style="flex:0 0 31%;position:relative"><img src="${p}" style="width:100%;border-radius:10px;display:block">
+       <button class="del" style="position:absolute;top:2px;right:2px;background:#000a;color:#fff;border-radius:12px" onclick="verifPhotos.splice(${i},1);showVerifPhotos()">×</button></div>`).join("")}</div>
+    <p class="hint">Conseil : billet à plat, bien éclairé, sans reflet, tout le billet dans la photo. Ajoute le verso s'il y a un jeu bonus.</p>
+    ${verifPhotos.length < VERIF_MAX_PHOTOS ? `<button class="btn btn2" onclick="document.getElementById('verifFile').click()">➕ Ajouter une photo (verso, détail)</button>` : ""}
+    ${verifPhotos.length ? `<button class="btn" onclick="runVerif()">🔍 Analyser ${verifPhotos.length > 1 ? "les " + verifPhotos.length + " photos" : "la photo"}</button>` : ""}`,
+    true, true);
+}
+
+function verifSystemPrompt() {
+  const known = allInfo().map(g => `- ${g.n} | CHF ${g.p} | ${(g.how || "").replace(/\s+/g, " ")}`);
+  const others = data.games.filter(g => !infoFor(g.name)).map(g => `- ${g.name} | CHF ${g.price} | (règles : voir le billet)`);
+  return `Tu es un vérificateur de billets à gratter de la Loterie Romande (Suisse). On te donne une ou plusieurs photos d'un billet déjà gratté (recto, parfois verso ou détail).
+
+Ta mission :
+1. Identifier le jeu (nom exact dans la liste ci-dessous) et le prix imprimé. Relever le numéro du billet s'il est visible (ex. « 016 »).
+2. Relever avec soin tout ce qui est découvert dans la zone de référence (numéros tirés, vos numéros, jetons, symboles, lettres…).
+3. Appliquer les règles à chaque jeu, grille, ligne, colonne et diagonale, et calculer le gain total avec les montants imprimés sur le billet (lots, cases GAIN grattées).
+4. Vérifier le grattage : éléments gagnants ou correspondants non grattés, cases grattées à tort, zones GAIN / bonus / verso non grattées.
+5. Signaler les « presque » (il ne manquait qu'un élément).
+
+Principes : seul ce qui est réellement imprimé compte, pas ce que le joueur a gratté (une case grattée à tort ne fait pas gagner). Ne devine jamais un chiffre ou symbole illisible : signale-le et baisse la confiance. Si une partie du billet (ex. jeu bonus au verso) n'est pas sur les photos, dis-le. Montants en CHF.
+
+Réponds en français, pour un écran de téléphone : d'abord le détail de ta vérification, court et structuré (puces, un bloc par jeu), puis termine OBLIGATOIREMENT par un bloc JSON entre <json> et </json>, sans rien après :
+<json>{"jeu":"nom exact de la liste ou ce qui est imprimé","prix":10,"numero_billet":"016 ou null","gain":0,"gagnants":["détail de chaque gain"],"erreurs_grattage":["oubli ou case grattée à tort"],"presque":["ligne à un élément du gain"],"a_verifier":["partie non visible ou illisible"],"confiance":"haute|moyenne|basse","resume":"une phrase"}</json>
+
+Jeux connus (nom | prix | comment jouer) :
+${known.concat(others).join("\n")}`;
+}
+
+async function runVerif() {
+  const code = lsGet("grattage_verif_code");
+  openSheet(() => `<div class="shHead"><h3>Analyse en cours…</h3></div>
+    <div class="card" style="text-align:center;padding:30px 16px"><div style="font-size:40px">🔍</div>
+    <p style="margin-top:10px">Claude lit ton billet et applique les règles.</p>
+    <p class="hint">Compte 20 secondes à 1 minute.</p></div>`, true, true);
+  const content = verifPhotos.map(p => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: p.split(",")[1] } }));
+  content.push({ type: "text", text: verifPhotos.length > 1 ? "Voici les photos du billet (recto puis verso/détails). Vérifie-le." : "Voici la photo du billet. Vérifie-le." });
+  let j;
+  try {
+    const r = await fetch(verifUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, system: verifSystemPrompt(), messages: [{ role: "user", content }] })
+    });
+    j = await r.json();
+    if (r.status === 401) throw new Error("Mot de passe du relais incorrect (onglet Jeux → Vérification photo).");
+    if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || ("Erreur " + r.status));
+  } catch (e) {
+    openSheet(() => `<div class="shHead"><h3>Échec de l'analyse</h3><button class="x" onclick="closeSheet()">✕</button></div>
+      <div class="card neg">${esc(e.message)}</div>
+      <button class="btn" onclick="runVerif()">🔁 Réessayer</button>`, true, true);
+    return;
+  }
+  const text = (j.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+  const m = text.match(/<json>([\s\S]*?)<\/json>/);
+  let res = {};
+  try { res = m ? JSON.parse(m[1]) : {}; } catch (e) { res = {}; }
+  res.rapport = text.replace(/<json>[\s\S]*$/, "").trim();
+  res.gain = Number(res.gain) || 0;
+  res.prix = Number(res.prix) || 0;
+  if (j.usage) res.cout = (j.usage.input_tokens * VERIF_PRICE_IN + j.usage.output_tokens * VERIF_PRICE_OUT) / 1e6;
+  res.complet = !!m;
+  verifResult = res;
+  showVerifResult();
+}
+
+function mdLite(s) {
+  return esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/^#+\s*(.+)$/gm, "<b>$1</b>").replace(/\n/g, "<br>");
+}
+
+function showVerifResult() {
+  const r = verifResult;
+  const known = r.jeu ? (data.games.find(g => key(g.name) === key(r.jeu)) || null) : null;
+  const net = r.gain - (r.prix || (known ? known.price : 0));
+  const list = (title, arr, cls) => (arr && arr.length)
+    ? `<h2>${title}</h2><div class="card ${cls || ""}">${arr.map(x => `<div style="margin:4px 0">• ${esc(x)}</div>`).join("")}</div>` : "";
+  openSheet(() => `<div class="shHead"><h3>${esc(r.jeu || "Billet")}${r.numero_billet ? ` <span class="pill">n° ${esc(r.numero_billet)}</span>` : ""}</h3><button class="x" onclick="closeSheet()">✕</button></div>
+    ${!r.complet ? `<div class="card neg">⚠️ Réponse incomplète : lis le détail ci-dessous et remplis le formulaire toi-même.</div>` : ""}
+    <div class="card net">
+      <div class="lbl">Gain trouvé</div>
+      <div class="val ${r.gain > 0 ? "pos" : ""}">CHF ${r.gain.toFixed(2)}</div>
+      <div class="hint">Billet ${r.prix ? "CHF " + r.prix : ""} · bilan <b class="${net >= 0 ? "pos" : "neg"}">${sign(net)}${net.toFixed(2)}</b> · confiance <b>${esc(r.confiance || "?")}</b></div>
+      ${r.resume ? `<p class="hint">${esc(r.resume)}</p>` : ""}
+    </div>
+    ${list("💰 Gains", r.gagnants, "pos")}
+    ${list("⚠️ Grattage", r.erreurs_grattage)}
+    ${list("😬 Presque", r.presque)}
+    ${list("👀 À vérifier", r.a_verifier)}
+    <details class="card"><summary style="font-weight:700">Détail de la vérification</summary><div class="how" style="margin-top:10px">${mdLite(r.rapport || "")}</div></details>
+    <button class="btn" onclick="useVerifResult()">✅ Reprendre dans le formulaire</button>
+    <p class="hint">${r.cout != null ? `Coût de cette vérification ≈ ${r.cout.toFixed(3)} $. ` : ""}Aide à la vérification : le scan au kiosque fait foi.</p>`,
+    true, true);
+}
+
+function useVerifResult() {
+  const r = verifResult;
+  if (!r) return;
+  let g = r.jeu ? data.games.find(x => key(x.name) === key(r.jeu)) : null;
+  if (!g && r.jeu && r.prix > 0) {
+    if (confirm(`« ${r.jeu} » n'est pas dans ta liste. L'ajouter (CHF ${r.prix}) ?`)) {
+      g = { name: r.jeu, price: r.prix };
+      data.games.push(g);
+      save();
+    }
+  }
+  closeSheet();
+  tab(document.querySelector('.tabs button[data-p="p-add"]'));
+  if (g) { document.getElementById("game").value = g.name; onGameChange(); }
+  if (r.prix > 0) document.getElementById("price").value = r.prix;
+  document.getElementById("qty").value = 1;
+  document.getElementById("gain").value = r.gain;
+  setVerifPending((r.resume || (r.gain > 0 ? "Gagnant" : "Perdant")).slice(0, 160));
+  window.scrollTo(0, 0);
+}
+
 // ===== FICHE (bottom sheet) + bouton retour Android =====
 let sheetRefresh = null;
 function openSheet(build, replace, isForm) {
@@ -948,6 +1158,7 @@ function toast(msg) {
 // ===== 7. DÉMARRAGE =====
 document.getElementById("date").value = today();
 render();
+loadVerifSettings();
 let savedCode = null;
 try { savedCode = localStorage.getItem(CODE_KEY); } catch (e) {}
 if (savedCode) start(savedCode);

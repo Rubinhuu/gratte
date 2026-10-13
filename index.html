@@ -1076,7 +1076,7 @@ function showVerifResult() {
   const list = (title, arr, cls) => (arr && arr.length)
     ? `<h2>${title}</h2><div class="card ${cls || ""}">${arr.map(x => `<div style="margin:4px 0">• ${esc(x)}</div>`).join("")}</div>` : "";
   openSheet(() => `<div class="shHead"><h3>${esc(r.jeu || "Billet")}${r.numero_billet ? ` <span class="pill">n° ${esc(r.numero_billet)}</span>` : ""}</h3><button class="x" onclick="closeSheet()">✕</button></div>
-    ${!r.complet ? `<div class="card neg">⚠️ ${r.coupe ? "La réponse a été coupée (trop longue)." : "Résultat non structuré."} Lis le détail ci-dessous et remplis le formulaire toi-même, ou relance l'analyse.</div>
+    ${!r.complet ? `<div class="card neg">⚠️ ${r.coupe ? (r.rapport ? "La réponse a été coupée (trop longue)." : "Claude a manqué de place pour répondre (réflexion trop longue). Mets à jour le relais Cloudflare (version 2).") : "Résultat non structuré."} Lis le détail ci-dessous et remplis le formulaire toi-même, ou relance l'analyse.</div>
       <button class="btn btn2" style="margin:0 0 12px" onclick="runVerif()">🔁 Relancer l'analyse</button>` : ""}
     <div class="card net">
       <div class="lbl">${r.prix ? "Billet CHF " + r.prix : "Billet"}</div>

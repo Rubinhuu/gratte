@@ -999,16 +999,18 @@ function verifSystemPrompt() {
   return `Tu es un vérificateur de billets à gratter de la Loterie Romande (Suisse). On te donne une ou plusieurs photos d'un billet déjà gratté (recto, parfois verso ou détail).
 
 Ta mission :
-1. Identifier le jeu (nom exact dans la liste ci-dessous) et le prix imprimé. Relever le numéro du billet s'il est visible (ex. « 016 »).
+1. Identifier le jeu (nom exact dans la liste ci-dessous), le prix imprimé et le numéro du billet s'il est visible (ex. « 016 »).
 2. Relever avec soin tout ce qui est découvert dans la zone de référence (numéros tirés, vos numéros, jetons, symboles, lettres…).
-3. Appliquer les règles à chaque jeu, grille, ligne, colonne et diagonale, et calculer le gain total avec les montants imprimés sur le billet (lots, cases GAIN grattées).
-4. Vérifier le grattage : éléments gagnants ou correspondants non grattés, cases grattées à tort, zones GAIN / bonus / verso non grattées.
-5. Signaler les « presque » (il ne manquait qu'un élément).
+3. Appliquer les règles à chaque jeu, grille, ligne, colonne et diagonale, et calculer le gain total avec les montants imprimés sur le billet.
+4. Vérifier le grattage : élément qui correspond mais n'a pas été gratté (oubli), case grattée alors qu'elle ne correspond pas, case GAIN / bonus non grattée sur une ligne gagnante.
 
-Principes : seul ce qui est réellement imprimé compte, pas ce que le joueur a gratté (une case grattée à tort ne fait pas gagner). Ne devine jamais un chiffre ou symbole illisible : signale-le et baisse la confiance. Si une partie du billet (ex. jeu bonus au verso) n'est pas sur les photos, dis-le. Montants en CHF.
+Principes : seul ce qui est réellement imprimé compte, pas ce que le joueur a gratté. Ne devine jamais un élément illisible. Montants en CHF.
 
-Réponds en français, pour un écran de téléphone : d'abord le détail de ta vérification, court et structuré (puces, un bloc par jeu), puis termine OBLIGATOIREMENT par un bloc JSON entre <json> et </json>, sans rien après :
-<json>{"jeu":"nom exact de la liste ou ce qui est imprimé","prix":10,"numero_billet":"016 ou null","gain":0,"gagnants":["détail de chaque gain"],"erreurs_grattage":["oubli ou case grattée à tort"],"presque":["ligne à un élément du gain"],"a_verifier":["partie non visible ou illisible"],"confiance":"haute|moyenne|basse","resume":"une phrase"}</json>
+Format de réponse OBLIGATOIRE :
+1) D'abord des notes de travail TRÈS brèves, en style télégraphique (max 15 lignes) : éléments relevés, lignes complètes trouvées, erreurs de grattage.
+2) Puis, pour finir, le bloc JSON entre <json> et </json>, sans rien après :
+<json>{"jeu":"nom exact de la liste","prix":10,"numero_billet":"016","gain":0,"gagnants":["Jeu 1, ligne 2 (04-16) : 10.–"],"erreurs_grattage":["Carte 3 : le 02 est sorti mais pas gratté"]}</json>
+"gagnants" : une entrée courte par ligne gagnante (où + montant), liste vide si perdant. "erreurs_grattage" : une entrée courte par erreur (où + quoi, et si ça change le gain), liste vide si grattage correct. "numero_billet" : null si non visible.
 
 Jeux connus (nom | prix | comment jouer) :
 ${known.concat(others).join("\n")}`;
@@ -1039,10 +1041,22 @@ async function runVerif() {
     return;
   }
   const text = (j.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
-  const m = text.match(/<json>([\s\S]*?)<\/json>/);
-  let res = {};
-  try { res = m ? JSON.parse(m[1]) : {}; } catch (e) { res = {}; }
-  res.rapport = text.replace(/<json>[\s\S]*$/, "").trim();
+  // Le JSON peut arriver entre <json>, dans un bloc ```json, ou en simple {...}
+  let raw = null;
+  const m1 = text.match(/<json>\s*([\s\S]*?)\s*<\/json>/) || text.match(/```json\s*([\s\S]*?)```/);
+  if (m1) raw = m1[1];
+  else {
+    const i = text.search(/\{\s*"jeu"/);
+    if (i >= 0) {
+      for (let k = text.indexOf("}", i); k > 0 && !raw; k = text.indexOf("}", k + 1)) {
+        try { JSON.parse(text.slice(i, k + 1)); raw = text.slice(i, k + 1); } catch (e) {}
+      }
+    }
+  }
+  let res = {}, m = false;
+  try { if (raw) { res = JSON.parse(raw.replace(/^```json|```$/g, "").trim()); m = true; } } catch (e) { res = {}; }
+  res.rapport = text.replace(/<json>[\s\S]*?<\/json>/, "").replace(/```json[\s\S]*?```/, "").trim();
+  if (j.stop_reason === "max_tokens") res.coupe = true;
   res.gain = Number(res.gain) || 0;
   res.prix = Number(res.prix) || 0;
   if (j.usage) res.cout = (j.usage.input_tokens * VERIF_PRICE_IN + j.usage.output_tokens * VERIF_PRICE_OUT) / 1e6;
@@ -1062,18 +1076,18 @@ function showVerifResult() {
   const list = (title, arr, cls) => (arr && arr.length)
     ? `<h2>${title}</h2><div class="card ${cls || ""}">${arr.map(x => `<div style="margin:4px 0">• ${esc(x)}</div>`).join("")}</div>` : "";
   openSheet(() => `<div class="shHead"><h3>${esc(r.jeu || "Billet")}${r.numero_billet ? ` <span class="pill">n° ${esc(r.numero_billet)}</span>` : ""}</h3><button class="x" onclick="closeSheet()">✕</button></div>
-    ${!r.complet ? `<div class="card neg">⚠️ Réponse incomplète : lis le détail ci-dessous et remplis le formulaire toi-même.</div>` : ""}
+    ${!r.complet ? `<div class="card neg">⚠️ ${r.coupe ? "La réponse a été coupée (trop longue)." : "Résultat non structuré."} Lis le détail ci-dessous et remplis le formulaire toi-même, ou relance l'analyse.</div>
+      <button class="btn btn2" style="margin:0 0 12px" onclick="runVerif()">🔁 Relancer l'analyse</button>` : ""}
     <div class="card net">
-      <div class="lbl">Gain trouvé</div>
-      <div class="val ${r.gain > 0 ? "pos" : ""}">CHF ${r.gain.toFixed(2)}</div>
-      <div class="hint">Billet ${r.prix ? "CHF " + r.prix : ""} · bilan <b class="${net >= 0 ? "pos" : "neg"}">${sign(net)}${net.toFixed(2)}</b> · confiance <b>${esc(r.confiance || "?")}</b></div>
-      ${r.resume ? `<p class="hint">${esc(r.resume)}</p>` : ""}
+      <div class="lbl">${r.prix ? "Billet CHF " + r.prix : "Billet"}</div>
+      <div class="val ${r.gain > 0 ? "pos" : "neg"}">${r.gain > 0 ? "Gagnant CHF " + r.gain.toFixed(2) : "Perdant"}</div>
+      ${r.gain > 0 ? `<div class="hint">Bilan <b class="${net >= 0 ? "pos" : "neg"}">${sign(net)}${net.toFixed(2)}</b></div>` : ""}
     </div>
-    ${list("💰 Gains", r.gagnants, "pos")}
-    ${list("⚠️ Grattage", r.erreurs_grattage)}
-    ${list("😬 Presque", r.presque)}
-    ${list("👀 À vérifier", r.a_verifier)}
-    <details class="card"><summary style="font-weight:700">Détail de la vérification</summary><div class="how" style="margin-top:10px">${mdLite(r.rapport || "")}</div></details>
+    ${list("💰 Lignes gagnantes", r.gagnants, "pos")}
+    ${r.complet ? (r.erreurs_grattage && r.erreurs_grattage.length
+        ? list("⚠️ Erreurs de grattage", r.erreurs_grattage)
+        : `<div class="card pos" style="padding:12px">✓ Grattage correct</div>`) : ""}
+    ${r.rapport ? `<details style="margin-bottom:8px"><summary class="hint">Notes de l'analyse</summary><div class="hint" style="margin-top:6px">${mdLite(r.rapport)}</div></details>` : ""}
     <button class="btn" onclick="useVerifResult()">✅ Reprendre dans le formulaire</button>
     <p class="hint">${r.cout != null ? `Coût de cette vérification ≈ ${r.cout.toFixed(3)} $. ` : ""}Aide à la vérification : le scan au kiosque fait foi.</p>`,
     true, true);
@@ -1096,7 +1110,9 @@ function useVerifResult() {
   if (r.prix > 0) document.getElementById("price").value = r.prix;
   document.getElementById("qty").value = 1;
   document.getElementById("gain").value = r.gain;
-  setVerifPending((r.resume || (r.gain > 0 ? "Gagnant" : "Perdant")).slice(0, 160));
+  const errs = (r.erreurs_grattage || []).length;
+  setVerifPending(((r.gain > 0 ? "Gagnant : " + (r.gagnants || []).join(" + ") : "Perdant")
+    + (errs ? ` · ⚠️ ${errs} erreur${errs > 1 ? "s" : ""} de grattage` : "")).slice(0, 160));
   window.scrollTo(0, 0);
 }
 

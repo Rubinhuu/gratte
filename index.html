@@ -112,7 +112,11 @@
     </div>
   </div>
 
-  <button class="btn" style="margin:0 0 12px" onclick="startVerif()">📷 Vérifier un billet en photo</button>
+  <div class="row" style="margin:0 0 12px">
+    <button class="btn" style="margin:0;flex:2" onclick="startVerif('verifCam')">📷 Vérifier un billet</button>
+    <button class="btn btn2" style="margin:0;flex:1" onclick="startVerif('verifFile')">🖼️ Galerie</button>
+  </div>
+  <input type="file" id="verifCam" accept="image/*" capture="environment" style="display:none" onchange="onVerifPhoto(this)">
   <input type="file" id="verifFile" accept="image/*" style="display:none" onchange="onVerifPhoto(this)">
 
   <div class="card">
@@ -941,7 +945,7 @@ function setVerifPending(text) {
   el.textContent = text ? "🔍 Rempli par la vérification photo : contrôle puis appuie sur Enregistrer." : "";
 }
 
-function startVerif() {
+function startVerif(inputId) {
   if (!lsGet("grattage_verif_code")) {
     tab(document.querySelector('.tabs button[data-p="p-games"]'));
     setTimeout(() => document.getElementById("verifCode").scrollIntoView({ behavior: "smooth", block: "center" }), 100);
@@ -949,7 +953,7 @@ function startVerif() {
     return;
   }
   verifPhotos = [];
-  document.getElementById("verifFile").click();
+  document.getElementById(inputId || "verifCam").click();
 }
 
 // Réduit la photo (côté long ≤ 2576 px, la résolution max lue par Claude) et la convertit en JPEG
@@ -981,7 +985,10 @@ function showVerifPhotos() {
       `<div style="flex:0 0 31%;position:relative"><img src="${p}" style="width:100%;border-radius:10px;display:block">
        <button class="del" style="position:absolute;top:2px;right:2px;background:#000a;color:#fff;border-radius:12px" onclick="verifPhotos.splice(${i},1);showVerifPhotos()">×</button></div>`).join("")}</div>
     <p class="hint">Conseil : billet à plat, bien éclairé, sans reflet, tout le billet dans la photo. Ajoute le verso s'il y a un jeu bonus.</p>
-    ${verifPhotos.length < VERIF_MAX_PHOTOS ? `<button class="btn btn2" onclick="document.getElementById('verifFile').click()">➕ Ajouter une photo (verso, détail)</button>` : ""}
+    ${verifPhotos.length < VERIF_MAX_PHOTOS ? `<div class="row">
+      <button class="btn btn2" style="flex:2" onclick="document.getElementById('verifCam').click()">📷 Ajouter une photo</button>
+      <button class="btn btn2" style="flex:1" onclick="document.getElementById('verifFile').click()">🖼️ Galerie</button></div>
+      <p class="hint">Par exemple le verso (jeu bonus) ou un gros plan.</p>` : ""}
     ${verifPhotos.length ? `<button class="btn" onclick="runVerif()">🔍 Analyser ${verifPhotos.length > 1 ? "les " + verifPhotos.length + " photos" : "la photo"}</button>` : ""}`,
     true, true);
 }

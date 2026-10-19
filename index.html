@@ -1002,12 +1002,16 @@ Ta mission :
 1. Identifier le jeu (nom exact dans la liste ci-dessous), le prix imprimé et le numéro du billet s'il est visible (ex. « 016 »).
 2. Relever avec soin tout ce qui est découvert dans la zone de référence (numéros tirés, vos numéros, jetons, symboles, lettres…).
 3. Appliquer les règles à chaque jeu, grille, ligne, colonne et diagonale, et calculer le gain total avec les montants imprimés sur le billet.
-4. Vérifier le grattage : élément qui correspond mais n'a pas été gratté (oubli), case grattée alors qu'elle ne correspond pas, case GAIN / bonus non grattée sur une ligne gagnante.
+4. Vérifier le grattage, case par case :
+   - Pour CHAQUE case NON grattée qui montre un symbole, un numéro ou une lettre, compare-la à la liste relevée. Si elle y figure, c'est un OUBLI de grattage. Attention : sur certains jeux (ex. Sunset, Nectar, Fidji), les cases non grattées affichent déjà leur symbole en couleur sur fond coloré ; une fois grattées elles deviennent blanches avec le dessin au trait et le nom. Ne suppose jamais qu'un symbole en couleur est « hors liste » : vérifie-les tous un par un.
+   - Case grattée alors qu'elle ne correspond à rien de la liste (grattée à tort).
+   - Case GAIN / bonus non grattée sur une ligne gagnante.
+   Dans tes notes, liste explicitement les cases non grattées de chaque grille avec leur symbole, puis le résultat de la comparaison.
 
 Principes : seul ce qui est réellement imprimé compte, pas ce que le joueur a gratté. Ne devine jamais un élément illisible. Montants en CHF.
 
 Format de réponse OBLIGATOIRE :
-1) D'abord des notes de travail TRÈS brèves, en style télégraphique (max 15 lignes) : éléments relevés, lignes complètes trouvées, erreurs de grattage.
+1) D'abord des notes de travail brèves, en style télégraphique (max 25 lignes) : éléments relevés, cases non grattées par grille et comparaison, lignes complètes trouvées.
 2) Puis, pour finir, le bloc JSON entre <json> et </json>, sans rien après :
 <json>{"jeu":"nom exact de la liste","prix":10,"numero_billet":"016","gain":0,"gagnants":["Jeu 1, ligne 2 (04-16) : 10.–"],"erreurs_grattage":["Carte 3 : le 02 est sorti mais pas gratté"]}</json>
 "gagnants" : une entrée courte par ligne gagnante (où + montant), liste vide si perdant. "erreurs_grattage" : une entrée courte par erreur (où + quoi, et si ça change le gain), liste vide si grattage correct. "numero_billet" : null si non visible.

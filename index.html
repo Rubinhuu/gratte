@@ -193,6 +193,8 @@
     <input id="verifUrl" type="url" onchange="saveVerifSettings()">
     <label>Mot de passe du relais (APP_CODE)</label>
     <input id="verifCode" type="password" autocomplete="off" onchange="saveVerifSettings()">
+    <label>Modèle</label>
+    <select id="verifModel" onchange="saveVerifSettings()"></select>
     <button class="btn btn2" onclick="testVerif()">🔌 Tester la connexion</button>
   </div>
   <h2>Sauvegarde</h2>
@@ -906,7 +908,12 @@ function deleteCustomInfo(name) {
 
 // ===== VÉRIFICATION D'UN BILLET PAR PHOTO (via le relais Cloudflare → Claude) =====
 const VERIF_URL_DEFAULT = "https://grattage-verif.r-s-antunes-10-08.workers.dev";
-const VERIF_PRICE_IN = 2, VERIF_PRICE_OUT = 10;      // $ par million de jetons (Claude Sonnet 5)
+// $ par million de jetons (entrée, sortie)
+const VERIF_MODELS = {
+  "claude-opus-5-5": { nom: "Claude Opus 5.5 (plus précis)", in: 4, out: 20 },
+  "claude-sonnet-5": { nom: "Claude Sonnet 5 (moins cher)", in: 2, out: 10 }
+};
+function verifModel() { const m = lsGet("grattage_verif_model"); return VERIF_MODELS[m] ? m : "claude-opus-5-5"; }
 const VERIF_MAX_PHOTOS = 3;
 let verifPhotos = [];
 let verifPending = null;
@@ -918,10 +925,13 @@ function verifUrl() { return (lsGet("grattage_verif_url") || VERIF_URL_DEFAULT).
 function loadVerifSettings() {
   document.getElementById("verifUrl").value = verifUrl();
   document.getElementById("verifCode").value = lsGet("grattage_verif_code");
+  document.getElementById("verifModel").innerHTML = Object.entries(VERIF_MODELS)
+    .map(([id, m]) => `<option value="${id}" ${id === verifModel() ? "selected" : ""}>${m.nom}</option>`).join("");
 }
 function saveVerifSettings() {
   lsSet("grattage_verif_url", document.getElementById("verifUrl").value.trim());
   lsSet("grattage_verif_code", document.getElementById("verifCode").value.trim());
+  lsSet("grattage_verif_model", document.getElementById("verifModel").value);
   toast("Réglages enregistrés");
 }
 
@@ -998,23 +1008,24 @@ function verifSystemPrompt() {
   const others = data.games.filter(g => !infoFor(g.name)).map(g => `- ${g.name} | CHF ${g.price} | (règles : voir le billet)`);
   return `Tu es un vérificateur de billets à gratter de la Loterie Romande (Suisse). On te donne une ou plusieurs photos d'un billet déjà gratté (recto, parfois verso ou détail).
 
-Ta mission :
-1. Identifier le jeu (nom exact dans la liste ci-dessous), le prix imprimé et le numéro du billet s'il est visible (ex. « 016 »).
-2. Relever avec soin tout ce qui est découvert dans la zone de référence (numéros tirés, vos numéros, jetons, symboles, lettres…).
-3. Appliquer les règles à chaque jeu, grille, ligne, colonne et diagonale, et calculer le gain total avec les montants imprimés sur le billet.
-4. Vérifier le grattage, case par case :
-   - Pour CHAQUE case NON grattée qui montre un symbole, un numéro ou une lettre, compare-la à la liste relevée. Si elle y figure, c'est un OUBLI de grattage. Attention : sur certains jeux (ex. Sunset, Nectar, Fidji), les cases non grattées affichent déjà leur symbole en couleur sur fond coloré ; une fois grattées elles deviennent blanches avec le dessin au trait et le nom. Ne suppose jamais qu'un symbole en couleur est « hors liste » : vérifie-les tous un par un.
-   - Case grattée alors qu'elle ne correspond à rien de la liste (grattée à tort).
-   - Case GAIN / bonus non grattée sur une ligne gagnante.
-   Dans tes notes, liste explicitement les cases non grattées de chaque grille avec leur symbole, puis le résultat de la comparaison.
+Travail en 3 étapes SÉPARÉES :
 
-Principes : seul ce qui est réellement imprimé compte, pas ce que le joueur a gratté. Ne devine jamais un élément illisible. Montants en CHF.
+ÉTAPE A — Identifier le jeu (nom exact dans la liste ci-dessous), le prix imprimé et le numéro du billet s'il est visible (ex. « 016 »). Relever tout ce qui est découvert dans la zone de référence (numéros tirés, vos numéros, jetons, symboles, lettres) = "reference".
 
-Format de réponse OBLIGATOIRE :
-1) D'abord des notes de travail brèves, en style télégraphique (max 25 lignes) : éléments relevés, cases non grattées par grille et comparaison, lignes complètes trouvées.
-2) Puis, pour finir, le bloc JSON entre <json> et </json>, sans rien après :
-<json>{"jeu":"nom exact de la liste","prix":10,"numero_billet":"016","gain":0,"gagnants":["Jeu 1, ligne 2 (04-16) : 10.–"],"erreurs_grattage":["Carte 3 : le 02 est sorti mais pas gratté"]}</json>
-"gagnants" : une entrée courte par ligne gagnante (où + montant), liste vide si perdant. "erreurs_grattage" : une entrée courte par erreur (où + quoi, et si ça change le gain), liste vide si grattage correct. "numero_billet" : null si non visible.
+ÉTAPE B — TRANSCRIRE chaque grille / carte / serrure / ligne de jeu où l'on gratte les éléments identiques à la référence, case par case, comme un scanner, SANS regarder la référence. Pour chaque case : ce qui y est imprimé + son état de grattage, jugé UNIQUEMENT sur l'apparence :
+  - "+" = grattée : la couche a été enlevée (fond blanc/clair, souvent dessin au trait avec étiquette, ou numéro découvert sur fond blanc) ;
+  - "-" = non grattée : couche intacte (fond coloré/rose/vert/argenté…, symbole en couleur ou numéro sur fond d'origine) ;
+  - "~" = partiellement grattée ou état incertain.
+  Ne déduis JAMAIS l'état à partir de la référence. Une case non grattée peut très bien contenir un élément de la référence (oubli du joueur) : c'est justement ce qu'on cherche.
+  Nommage : numéros en chiffres ("07"), lettres en majuscule ("A"), symboles avec l'étiquette abrégée du jeu (comme dans la référence, ex. "CORAIL", "CARAF") dès que tu reconnais le même objet, même en couleur et sans étiquette ; sinon un mot simple en minuscules ("pasteque", "valise"). Case illisible : "?".
+  Format compact : chaque case = texte + état, ex. "CORAIL-", "SAC+", "07-", "pasteque-".
+  Les zones à règles spéciales (course, parcours, flèches, roue…) ne se transcrivent pas : analyse-les à l'étape C.
+
+ÉTAPE C — Appliquer les règles et calculer le gain total avec les montants imprimés (lignes, colonnes, diagonales, croix, coins, mots, cases GAIN…). Seul ce qui est imprimé compte, pas ce que le joueur a gratté. Note dans "autres_erreurs" uniquement les erreurs hors grilles transcrites (ex. case GAIN non grattée sur une ligne gagnante, zone bonus non grattée).
+
+Format de réponse OBLIGATOIRE : au plus 10 lignes de notes télégraphiques, puis le bloc JSON entre <json> et </json>, sans rien après :
+<json>{"jeu":"Sunset","prix":10,"numero_billet":"007","gain":0,"gagnants":["Grille 5, 3e ligne : 20'000.–"],"reference":["SAC","COEUR","CORAIL"],"grilles":[{"nom":"Grille 1","lignes":[["CHEMIS+","pasteque-","chapeau-"],["perroquet-","BANAN+","totem-"]]}],"autres_erreurs":[]}</json>
+"gagnants" : une entrée courte par gain (où + montant), vide si perdant. "numero_billet" : null si non visible. "grilles" : vide si le jeu n'a pas de grille à comparer.
 
 Jeux connus (nom | prix | comment jouer) :
 ${known.concat(others).join("\n")}`;
@@ -1025,7 +1036,7 @@ async function runVerif() {
   openSheet(() => `<div class="shHead"><h3>Analyse en cours…</h3></div>
     <div class="card" style="text-align:center;padding:30px 16px"><div style="font-size:40px">🔍</div>
     <p style="margin-top:10px">Claude lit ton billet et applique les règles.</p>
-    <p class="hint">Compte 20 secondes à 1 minute.</p></div>`, true, true);
+    <p class="hint">Compte 30 secondes à 2 minutes.</p></div>`, true, true);
   const content = verifPhotos.map(p => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: p.split(",")[1] } }));
   content.push({ type: "text", text: verifPhotos.length > 1 ? "Voici les photos du billet (recto puis verso/détails). Vérifie-le." : "Voici la photo du billet. Vérifie-le." });
   let j;
@@ -1033,7 +1044,7 @@ async function runVerif() {
     const r = await fetch(verifUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, system: verifSystemPrompt(), messages: [{ role: "user", content }] })
+      body: JSON.stringify({ code, model: verifModel(), system: verifSystemPrompt(), messages: [{ role: "user", content }] })
     });
     j = await r.json();
     if (r.status === 401) throw new Error("Mot de passe du relais incorrect (onglet Jeux → Vérification photo).");
@@ -1063,10 +1074,55 @@ async function runVerif() {
   if (j.stop_reason === "max_tokens") res.coupe = true;
   res.gain = Number(res.gain) || 0;
   res.prix = Number(res.prix) || 0;
-  if (j.usage) res.cout = (j.usage.input_tokens * VERIF_PRICE_IN + j.usage.output_tokens * VERIF_PRICE_OUT) / 1e6;
+  const pm = VERIF_MODELS[j.model] || VERIF_MODELS[verifModel()];
+  if (j.usage) res.cout = (j.usage.input_tokens * pm.in + j.usage.output_tokens * pm.out) / 1e6;
   res.complet = !!m;
+  if (m) compareScratch(res);
   verifResult = res;
   showVerifResult();
+}
+
+// ===== Comparaison faite par l'app (pas par l'IA) : référence ↔ état de chaque case =====
+function normTok(s) {
+  let t = String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Z0-9]/g, "");
+  if (/^[A-Z]\d+$/.test(t)) t = t.slice(1);            // "E70" (Mégalo) → "70"
+  if (/^\d+$/.test(t)) t = String(parseInt(t, 10));     // "07" → "7"
+  return t;
+}
+function parseCell(c) {
+  const s = String(c || "").trim();
+  const st = s.slice(-1);
+  if ("+-~".includes(st) && s.length > 1) return { nom: s.slice(0, -1).trim(), etat: st };
+  return { nom: s, etat: "?" };
+}
+function compareScratch(res) {
+  const ref = new Set((res.reference || []).map(normTok).filter(Boolean));
+  const errs = [];
+  res.vue = [];
+  if (ref.size && Array.isArray(res.grilles)) {
+    for (const g of res.grilles) {
+      const lignes = (g.lignes || []).map((row, ri) => (Array.isArray(row) ? row : []).map((c, ci) => {
+        const p = parseCell(c), k = normTok(p.nom), inRef = !!k && p.nom !== "?" && ref.has(k);
+        let cls = "ok";
+        if (inRef && p.etat === "-") { cls = "oubli"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} non gratté (oubli)`); }
+        else if (inRef && p.etat === "~") { cls = "partiel"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} gratté seulement en partie`); }
+        else if (!inRef && p.etat === "+" && p.nom !== "?") { cls = "tort"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} gratté à tort`); }
+        else if (inRef) cls = "bon";
+        return { nom: p.nom, etat: p.etat, cls };
+      }));
+      res.vue.push({ nom: g.nom || "Grille", lignes });
+    }
+  }
+  res.erreurs_grattage = errs.concat(res.autres_erreurs || []);
+}
+
+function gridViewHtml(vue) {
+  const col = { bon: "#2f7d55", ok: "#24493a", oubli: "#b23b3b", tort: "#c27a12", partiel: "#8a7a1a" };
+  return vue.map(g => `<div style="margin:8px 0"><div class="hint" style="margin-bottom:4px"><b>${esc(g.nom)}</b></div>
+    <div style="display:flex;flex-direction:column;gap:3px">${g.lignes.map(row =>
+      `<div style="display:flex;gap:3px">${row.map(c =>
+        `<div style="flex:1;min-width:0;background:${col[c.cls]};border-radius:6px;padding:4px 2px;text-align:center;font-size:10px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.nom)}${c.etat === "+" ? " ✓" : ""}</div>`).join("")}</div>`).join("")}
+    </div></div>`).join("") + `<p class="hint">Vert = bon élément gratté · foncé = hors liste non gratté · rouge = oubli · orange = gratté à tort · jaune = gratté en partie.</p>`;
 }
 
 function mdLite(s) {
@@ -1080,7 +1136,7 @@ function showVerifResult() {
   const list = (title, arr, cls) => (arr && arr.length)
     ? `<h2>${title}</h2><div class="card ${cls || ""}">${arr.map(x => `<div style="margin:4px 0">• ${esc(x)}</div>`).join("")}</div>` : "";
   openSheet(() => `<div class="shHead"><h3>${esc(r.jeu || "Billet")}${r.numero_billet ? ` <span class="pill">n° ${esc(r.numero_billet)}</span>` : ""}</h3><button class="x" onclick="closeSheet()">✕</button></div>
-    ${!r.complet ? `<div class="card neg">⚠️ ${r.coupe ? (r.rapport ? "La réponse a été coupée (trop longue)." : "Claude a manqué de place pour répondre (réflexion trop longue). Mets à jour le relais Cloudflare (version 2).") : "Résultat non structuré."} Lis le détail ci-dessous et remplis le formulaire toi-même, ou relance l'analyse.</div>
+    ${!r.complet ? `<div class="card neg">⚠️ ${r.coupe ? (r.rapport ? "La réponse a été coupée (trop longue)." : "Claude a manqué de place pour répondre (réflexion trop longue). Vérifie que le relais Cloudflare est en version 3.") : "Résultat non structuré."} Lis le détail ci-dessous et remplis le formulaire toi-même, ou relance l'analyse.</div>
       <button class="btn btn2" style="margin:0 0 12px" onclick="runVerif()">🔁 Relancer l'analyse</button>` : ""}
     <div class="card net">
       <div class="lbl">${r.prix ? "Billet CHF " + r.prix : "Billet"}</div>
@@ -1091,6 +1147,7 @@ function showVerifResult() {
     ${r.complet ? (r.erreurs_grattage && r.erreurs_grattage.length
         ? list("⚠️ Erreurs de grattage", r.erreurs_grattage)
         : `<div class="card pos" style="padding:12px">✓ Grattage correct</div>`) : ""}
+    ${r.vue && r.vue.length ? `<details style="margin-bottom:8px" ${r.erreurs_grattage && r.erreurs_grattage.length ? "open" : ""}><summary class="hint">Lecture des grilles (vérifie qu'elle est juste)</summary>${gridViewHtml(r.vue)}</details>` : ""}
     ${r.rapport ? `<details style="margin-bottom:8px"><summary class="hint">Notes de l'analyse</summary><div class="hint" style="margin-top:6px">${mdLite(r.rapport)}</div></details>` : ""}
     <button class="btn" onclick="useVerifResult()">✅ Reprendre dans le formulaire</button>
     <p class="hint">${r.cout != null ? `Coût de cette vérification ≈ ${r.cout.toFixed(3)} $. ` : ""}Aide à la vérification : le scan au kiosque fait foi.</p>`,

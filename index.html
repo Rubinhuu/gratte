@@ -1017,7 +1017,7 @@ Travail en 3 étapes SÉPARÉES :
   - "-" = non grattée : couche intacte (fond coloré/rose/vert/argenté…, symbole en couleur ou numéro sur fond d'origine) ;
   - "~" = partiellement grattée ou état incertain.
   Ne déduis JAMAIS l'état à partir de la référence. Une case non grattée peut très bien contenir un élément de la référence (oubli du joueur) : c'est justement ce qu'on cherche.
-  Nommage : numéros en chiffres ("07"), lettres en majuscule ("A"), symboles avec l'étiquette abrégée du jeu (comme dans la référence, ex. "CORAIL", "CARAF") dès que tu reconnais le même objet, même en couleur et sans étiquette ; sinon un mot simple en minuscules ("pasteque", "valise"). Case illisible : "?".
+  Nommage : numéros en chiffres ("07"), lettres en majuscule ("A"), symboles avec l'étiquette abrégée du jeu (comme dans la référence, ex. "CORAIL", "CARAF") dès que tu reconnais le même objet, même en couleur et sans étiquette ; sinon un mot simple en minuscules ("pasteque", "valise"). Un même symbole est dessiné en couleur sur les cases non grattées et au trait sur les cases grattées et dans la référence : un objet de la même famille (ukulélé ↔ GUITAR, cocktail ↔ VERRE, pichet ↔ CARAF…) est presque toujours le même symbole, nomme-le avec l'étiquette du jeu. Si un symbole en couleur RESSEMBLE à un symbole de la référence sans que tu en sois sûr (dessin différent, même objet ?), écris les deux avec "≈" : "cocktail≈VERRE-". Case illisible : "?".
   Format compact : chaque case = texte + état, ex. "CORAIL-", "SAC+", "07-", "pasteque-".
   Les zones à règles spéciales (course, parcours, flèches, roue…) ne se transcrivent pas : analyse-les à l'étape C.
 
@@ -1102,9 +1102,15 @@ function compareScratch(res) {
   if (ref.size && Array.isArray(res.grilles)) {
     for (const g of res.grilles) {
       const lignes = (g.lignes || []).map((row, ri) => (Array.isArray(row) ? row : []).map((c, ci) => {
-        const p = parseCell(c), k = normTok(p.nom), inRef = !!k && p.nom !== "?" && ref.has(k);
+        const p = parseCell(c);
+        // "cocktail≈VERRE" = ressemble peut-être à un symbole de la référence
+        const sim = p.nom.split("≈");
+        const maybe = sim.length > 1 && ref.has(normTok(sim[1])) ? sim[1].trim() : null;
+        const k = normTok(sim[0]), inRef = !!k && p.nom !== "?" && ref.has(k);
         let cls = "ok";
-        if (inRef && p.etat === "-") { cls = "oubli"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} non gratté (oubli)`); }
+        if (!inRef && maybe && p.etat !== "+") { cls = "doute"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${sim[0].trim()} non gratté, ressemble à ${maybe} → oubli possible, à vérifier`); }
+        else if (!inRef && maybe && p.etat === "+") cls = "bon";
+        else if (inRef && p.etat === "-") { cls = "oubli"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} non gratté (oubli)`); }
         else if (inRef && p.etat === "~") { cls = "partiel"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} gratté seulement en partie`); }
         else if (!inRef && p.etat === "+" && p.nom !== "?") { cls = "tort"; errs.push(`${g.nom || "Grille"}, ligne ${ri + 1}, case ${ci + 1} : ${p.nom} gratté à tort`); }
         else if (inRef) cls = "bon";
@@ -1117,12 +1123,12 @@ function compareScratch(res) {
 }
 
 function gridViewHtml(vue) {
-  const col = { bon: "#2f7d55", ok: "#24493a", oubli: "#b23b3b", tort: "#c27a12", partiel: "#8a7a1a" };
+  const col = { bon: "#2f7d55", ok: "#24493a", oubli: "#b23b3b", tort: "#c27a12", partiel: "#8a7a1a", doute: "#7a3b8a" };
   return vue.map(g => `<div style="margin:8px 0"><div class="hint" style="margin-bottom:4px"><b>${esc(g.nom)}</b></div>
     <div style="display:flex;flex-direction:column;gap:3px">${g.lignes.map(row =>
       `<div style="display:flex;gap:3px">${row.map(c =>
         `<div style="flex:1;min-width:0;background:${col[c.cls]};border-radius:6px;padding:4px 2px;text-align:center;font-size:10px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.nom)}${c.etat === "+" ? " ✓" : ""}</div>`).join("")}</div>`).join("")}
-    </div></div>`).join("") + `<p class="hint">Vert = bon élément gratté · foncé = hors liste non gratté · rouge = oubli · orange = gratté à tort · jaune = gratté en partie.</p>`;
+    </div></div>`).join("") + `<p class="hint">Vert = bon élément gratté · foncé = hors liste non gratté · rouge = oubli · violet = oubli possible (symbole ressemblant) · orange = gratté à tort · jaune = gratté en partie.</p>`;
 }
 
 function mdLite(s) {
